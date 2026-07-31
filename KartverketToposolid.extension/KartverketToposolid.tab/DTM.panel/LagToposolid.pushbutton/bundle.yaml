@@ -1,0 +1,2 @@
+title: 'Lag Toposolid'
+tooltip: 'Henter høydedata fra Kartverket og oppretter Toposolid direkte i modellen. Project Base Point leses automatisk inn som nullpunkt.'

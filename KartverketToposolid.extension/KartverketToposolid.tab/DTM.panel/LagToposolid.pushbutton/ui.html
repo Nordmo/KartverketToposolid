@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kartverket → Revit Toposolid</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f0f11;--surface:#18181c;--border:#2a2a32;--accent:#4ade80;--accent2:#22d3ee;--text:#f0f0f0;--muted:#888;--danger:#f87171;--font-head:'Syne',sans-serif;--font-mono:'DM Mono',monospace}
+body{background:var(--bg);color:var(--text);font-family:var(--font-mono);font-size:13px;min-height:100vh}
+header{border-bottom:1px solid var(--border);padding:18px 28px;display:flex;align-items:baseline;gap:14px}
+header h1{font-family:var(--font-head);font-size:18px;font-weight:700;letter-spacing:-0.5px}
+header span{color:var(--muted);font-size:11px}
+.layout{display:grid;grid-template-columns:340px 1fr;height:calc(100vh - 57px)}
+.panel{border-right:1px solid var(--border);overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px}
+.section-label{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{font-size:11px;color:var(--muted)}
+input,select{background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font-mono);font-size:13px;padding:7px 10px;border-radius:6px;width:100%;outline:none;transition:border-color .15s}
+input:focus,select:focus{border-color:var(--accent2)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px}
+.toggle-row span{font-size:11px;color:var(--muted)}
+.toggle{position:relative;width:36px;height:20px}
+.toggle input{opacity:0;width:0;height:0}
+.slider-t{position:absolute;inset:0;background:var(--border);border-radius:20px;cursor:pointer;transition:background .2s}
+.slider-t::before{content:'';position:absolute;width:14px;height:14px;left:3px;top:3px;background:white;border-radius:50%;transition:transform .2s}
+.toggle input:checked+.slider-t{background:var(--accent)}
+.toggle input:checked+.slider-t::before{transform:translateX(16px)}
+.segmented{display:flex;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:3px;gap:3px}
+.segmented-btn{flex:1;background:transparent;border:none;color:var(--muted);font-family:var(--font-mono);font-size:12px;padding:8px 10px;border-radius:6px;cursor:pointer;transition:background .15s,color .15s;display:flex;align-items:center;justify-content:center;gap:6px;line-height:1}
+.segmented-btn:hover{color:var(--text);background:rgba(255,255,255,.04)}
+.segmented-btn:active{transform:scale(.97)}
+.segmented-btn:focus-visible{outline:2px solid var(--accent2);outline-offset:2px}
+.segmented-btn.active{background:var(--accent);color:#0a0a0a;font-weight:600}
+.segmented-btn.active:hover{background:var(--accent);color:#0a0a0a}
+.segmented-btn .seg-icon{font-size:13px;line-height:1}
+#run-btn{background:var(--accent);color:#0a0a0a;border:none;font-family:var(--font-head);font-size:14px;font-weight:700;padding:11px;border-radius:8px;cursor:pointer;width:100%;transition:opacity .15s,transform .1s;letter-spacing:.02em}
+#run-btn:hover{opacity:.9}
+#run-btn:active{transform:scale(.98)}
+#run-btn:disabled{opacity:.4;cursor:not-allowed}
+#status{padding:11px;background:var(--surface);border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--muted);min-height:44px;white-space:pre-wrap;line-height:1.6}
+#status.ok{border-color:var(--accent);color:var(--accent)}
+#status.err{border-color:var(--danger);color:var(--danger)}
+.stats-grid{display:none;grid-template-columns:repeat(3,1fr);gap:8px}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center}
+.stat .val{font-size:15px;font-weight:500;color:var(--accent2)}
+.stat .lbl{font-size:10px;color:var(--muted);margin-top:3px}
+#map{width:100%;height:100%;background:#111}
+.leaflet-container{background:#111 !important}
+.map-wrap{position:relative;flex:1;overflow:hidden}
+.coord-display{position:absolute;bottom:12px;left:12px;z-index:999;background:rgba(15,15,17,.88);border:1px solid var(--border);border-radius:6px;padding:7px 11px;font-size:11px;color:var(--muted);pointer-events:none}
+.coord-display b{color:var(--text)}
+.map-side{display:flex;flex-direction:column}
+.map-toolbar{border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:10px;font-size:11px;color:var(--muted);flex-shrink:0}
+.map-toolbar b{color:var(--accent2)}
+.pick-btn{background:transparent;border:1px solid var(--border);color:var(--muted);font-family:var(--font-mono);font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer;transition:border-color .15s,color .15s}
+.pick-btn:hover,.pick-btn.active{border-color:var(--accent2);color:var(--accent2)}
+.eksempel-btn{background:transparent;border:1px dashed var(--border);color:var(--muted);font-family:var(--font-mono);font-size:11px;padding:5px 10px;border-radius:5px;cursor:pointer;width:100%;transition:border-color .15s,color .15s;margin-top:5px}
+.eksempel-btn:hover{border-color:var(--accent2);color:var(--accent2)}
+.divider{border:none;border-top:1px solid var(--border)}
+.legend{display:flex;gap:14px;margin-left:auto}
+.legend-item{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%}
+.modal-overlay{position:fixed;inset:0;z-index:2000;display:none;align-items:center;justify-content:center;background:rgba(8,8,10,.55);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.modal-overlay.open{display:flex;animation:fadein .2s ease}
+@keyframes fadein{from{opacity:0}to{opacity:1}}
+.glass-dialog{position:relative;width:min(420px,90vw);max-height:88vh;overflow-y:auto;padding:38px 32px 30px;border-radius:24px;background:rgba(44,46,54,.42);backdrop-filter:blur(30px) saturate(180%);-webkit-backdrop-filter:blur(30px) saturate(180%);border:1px solid rgba(255,255,255,.14);box-shadow:0 24px 70px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.22);animation:pop .28s cubic-bezier(.2,.9,.3,1.15)}
+@keyframes pop{from{transform:scale(.94);opacity:0}to{transform:scale(1);opacity:1}}
+.modal-close{position:absolute;top:14px;right:14px;width:30px;height:30px;border-radius:50%;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.06);color:var(--text);font-size:17px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s,transform .1s}
+.modal-close:hover{background:rgba(255,255,255,.15)}
+.modal-close:active{transform:scale(.9)}
+.modal-loading{display:flex;flex-direction:column;align-items:center;gap:14px;padding:16px 0}
+.spinner{width:52px;height:52px;border-radius:50%;border:3px solid rgba(255,255,255,.12);border-top-color:var(--accent);animation:spin .9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-title{font-family:var(--font-head);font-size:17px;font-weight:600;color:var(--text)}
+.loading-sub{font-size:12px;color:var(--muted)}
+.modal-result{text-align:center}
+.result-check{width:52px;height:52px;margin:0 auto 14px;border-radius:50%;background:rgba(74,222,128,.15);border:1px solid rgba(74,222,128,.5);color:var(--accent);font-size:26px;line-height:50px}
+.result-head{font-family:var(--font-head);font-size:18px;font-weight:600;margin-bottom:18px;color:var(--text)}
+.glass-dialog .stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+.glass-dialog .stat{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:12px 8px}
+.glass-dialog .stat .val{font-size:18px;font-weight:500;color:var(--accent2)}
+.glass-dialog .stat .lbl{font-size:10px;color:var(--muted);margin-top:4px}
+#result-detail{margin-bottom:16px}
+.detail-ok{font-size:12px;color:var(--accent);padding:8px 12px;background:rgba(74,222,128,.08);border:1px solid rgba(74,222,128,.25);border-radius:10px;margin-bottom:8px}
+.detail-warn{font-size:11px;color:var(--danger);padding:8px 12px;background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.3);border-radius:10px;line-height:1.5;text-align:left}
+.glass-dialog .glass-dialog .revit-steps{margin-top:18px;padding-top:16px;border-top:1px solid rgba(255,255,255,.1);text-align:left}
+.revit-steps-head{font-family:var(--font-head);font-size:12px;font-weight:600;letter-spacing:.03em;color:var(--accent2);margin-bottom:10px;text-transform:uppercase}
+.revit-steps ol{list-style:none;counter-reset:revitstep;display:flex;flex-direction:column;gap:8px}
+.revit-steps li{counter-increment:revitstep;position:relative;padding-left:30px;font-size:12px;color:var(--text);line-height:1.5}
+.revit-steps li::before{content:counter(revitstep);position:absolute;left:0;top:0;width:20px;height:20px;border-radius:50%;background:rgba(34,211,238,.12);border:1px solid rgba(34,211,238,.4);color:var(--accent2);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.revit-steps li b{color:var(--accent2);font-weight:600}
+.revit-steps-note{color:var(--muted);font-size:10.5px}
+.modal-error{text-align:center}
+.error-mark{width:52px;height:52px;margin:0 auto 14px;border-radius:50%;background:rgba(248,113,113,.15);border:1px solid rgba(248,113,113,.5);color:var(--danger);font-size:26px;line-height:50px;font-weight:700}
+.error-text{font-size:12px;color:var(--muted);line-height:1.6;word-break:break-word}
+</style>
+</head>
+<body>
+<header>
+  <h1>Kartverket → Revit</h1>
+  <span>DTM Toposolid Generator</span>
+</header>
+<div class="layout">
+  <div class="panel">
+    <div>
+      <div class="section-label">Koordinatsystem</div>
+      <div class="field">
+        <label>Inn/ut koordinatsystem</label>
+        <select id="epsg-select" onchange="byttKoordinatsystem()">
+          <optgroup label="NTM – Norsk transversal Mercator">
+__NTM_OPTIONS__
+          </optgroup>
+          <optgroup label="UTM – Universal transversal Mercator">
+__UTM_OPTIONS__
+          </optgroup>
+          <optgroup label="Lokalt anleggssystem">
+          <option value="hpcs">HPCS — Melkøya (Hammerfest LNG)</option>
+          </optgroup>
+        </select>
+        <div id="crs-hint" style="font-size:10px;color:var(--muted);margin-top:6px;padding:6px 10px;background:var(--surface);border-radius:5px;border-left:2px solid var(--border)"></div>
+        <div id="crs-warn" style="display:none"></div>
+        <button id="eksempel-btn" class="eksempel-btn" onclick="brukEksempel()" style="display:none">Bruk eksempelkoordinater for denne sona</button>
+      </div>
+    </div>
+    <hr class="divider">
+    <div>
+      <div class="section-label">Midtpunkt</div>
+      <div class="row2">
+        <div class="field"><label>Øst (E)</label><input type="number" id="mid-e" value="" placeholder="Klikk i kartet eller skriv inn" step="0.001" oninput="oppdaterKart()"></div>
+        <div class="field"><label>Nord (N)</label><input type="number" id="mid-n" value="" placeholder="Klikk i kartet eller skriv inn" step="0.001" oninput="oppdaterKart()"></div>
+      </div>
+    </div>
+    <hr class="divider">
+    <div>
+      <div class="section-label">Revit Base Point (nullpunkt)</div>
+      <div class="row2">
+        <div class="field"><label>Øst (E)</label><input type="number" id="null-e" value="__NULL_E__" step="0.001" oninput="oppdaterKart()"></div>
+        <div class="field"><label>Nord (N)</label><input type="number" id="null-n" value="__NULL_N__" step="0.001" oninput="oppdaterKart()"></div>
+      </div>
+      <div id="avstand-info" style="font-size:11px;color:var(--accent2);margin-top:8px;padding:8px 10px;background:var(--surface);border-radius:5px;border-left:2px solid var(--accent2)">Avstand til midtpunkt: —</div>
+    </div>
+    <hr class="divider">
+    <div>
+      <div class="section-label">Parametere</div>
+      <div class="row2">
+        <div class="field"><label>Radius (m)</label><input type="number" id="radius" value="50" min="5" max="500" step="5" oninput="oppdaterKart()"></div>
+        <div class="field"><label>Punkttetthet (m)</label><input type="number" id="tetthet" value="2" min="1" max="20" step="1" oninput="sjekkTetthet()"></div>
+      </div>
+      <div id="tetthet-advarsel" style="display:none;font-size:10px;color:#facc15;margin-top:6px;padding:6px 10px;background:rgba(250,204,21,.08);border:1px solid rgba(250,204,21,.35);border-radius:5px">⚠ 1 m er laveste tillatte punkttetthet — DTM1 fra Kartverket har selv 1 m oppløsning.</div>
+      <br>
+      <div class="field">
+        <label>Utsnittform</label>
+        <div class="segmented" id="utsnitt-segmented" role="tablist" aria-label="Utsnittform">
+          <button type="button" class="segmented-btn active" data-value="kvadrat" role="tab" aria-selected="true" onclick="settUtsnittForm('kvadrat')"><span class="seg-icon">▢</span> Kvadrat</button>
+          <button type="button" class="segmented-btn" data-value="sirkel" role="tab" aria-selected="false" onclick="settUtsnittForm('sirkel')"><span class="seg-icon">○</span> Sirkel</button>
+        </div>
+      </div>
+      <br>
+      <div class="field" id="vert-field" style="display:none">
+        <label>Vertikal offset (m) — Z = DTM-høyde + offset</label>
+        <input type="number" id="vert" value="95" step="0.001">
+      </div>
+      <div class="toggle-row" id="nn54-field" style="display:none">
+        <span>Korriger NN2000 → NN54 (NNTrans)</span>
+        <label class="toggle"><input type="checkbox" id="nn54-korr" checked><span class="slider-t"></span></label>
+      </div>
+      <br>
+      <div class="toggle-row">
+        <span>Relativ Z (laveste punkt = 0)</span>
+        <label class="toggle"><input type="checkbox" id="relativ-z"><span class="slider-t"></span></label>
+      </div>
+    </div>
+    <hr class="divider">
+    <button id="run-btn" onclick="kjor()">Lag Toposolid</button>
+  </div>
+
+  <div class="map-side">
+    <div class="map-toolbar">
+      <b>Kart</b>
+      <span>Klikk for å plassere markør</span>
+      <button class="pick-btn" id="pick-mid" onclick="aktiverPick('mid')">Sett midtpunkt</button>
+      <button class="pick-btn" id="pick-null" onclick="aktiverPick('null')">Sett nullpunkt</button>
+      <div class="segmented" id="kartlag-segmented" role="tablist" aria-label="Kartlag" style="margin-left:6px">
+        <button type="button" class="segmented-btn active" data-value="satellitt" role="tab" aria-selected="true" onclick="settKartlag('satellitt')">Satellitt</button>
+        <button type="button" class="segmented-btn" data-value="papir" role="tab" aria-selected="false" onclick="settKartlag('papir')">Papirkart</button>
+      </div>
+      <div class="legend">
+        <div class="legend-item"><div class="dot" style="background:#4ade80"></div>Midtpunkt</div>
+        <div class="legend-item"><div class="dot" style="background:#22d3ee"></div>Nullpunkt</div>
+        <div class="legend-item"><div class="dot" style="background:rgba(74,222,128,.25);border:1px solid #4ade80"></div>Utsnitt</div>
+      </div>
+    </div>
+    <div class="map-wrap">
+      <div id="map"></div>
+      <div class="coord-display" id="coord-display">Hold musepekeren over kartet</div>
+    </div>
+  </div>
+</div>
+
+<div id="sone-overlay" class="modal-overlay open">
+  <div class="glass-dialog">
+    <div class="loading-title" style="margin-bottom:4px">Velg koordinatsystem</div>
+    <div class="loading-sub" style="margin-bottom:18px">Revit Base Point er allerede lest inn. Velg hvilket koordinatsystem tallene er i, så flyr kartet dit.</div>
+    <div class="field" style="margin-bottom:16px">
+      <select id="sone-select">
+        <optgroup label="NTM – Norsk transversal Mercator">
+__NTM_SONE_OPTIONS__
+        </optgroup>
+        <optgroup label="UTM – Universal transversal Mercator">
+__UTM_SONE_OPTIONS__
+        </optgroup>
+        <optgroup label="Lokalt anleggssystem">
+        <option value="HPCS">HPCS — Melkøya (Hammerfest LNG)</option>
+        </optgroup>
+      </select>
+    </div>
+    <button id="run-btn" onclick="velgSone()">Bruk denne sonen</button>
+    <div class="revit-steps-note" style="text-align:center;margin-top:14px;cursor:pointer" onclick="lukkSoneDialog()">Hopp over</div>
+  </div>
+</div>
+
+<div id="modal-overlay" class="modal-overlay">
+  <div class="glass-dialog">
+    <button class="modal-close" onclick="lukkModal()" aria-label="Lukk">&times;</button>
+
+    <div id="modal-loading" class="modal-loading">
+      <div class="spinner"></div>
+      <div class="loading-title">Oppretter Toposolid</div>
+      <div class="loading-sub">Henter høydedata fra Kartverket og skriver til Revit-modellen …</div>
+    </div>
+
+    <div id="modal-result" class="modal-result" style="display:none">
+      <div class="result-check">✓</div>
+      <div class="result-head">Toposolid opprettet i modellen</div>
+      <div class="stats-grid">
+        <div class="stat"><div class="val" id="r-antall">—</div><div class="lbl">punkter</div></div>
+        <div class="stat"><div class="val" id="r-min">—</div><div class="lbl">min Z moh.</div></div>
+        <div class="stat"><div class="val" id="r-max">—</div><div class="lbl">max Z moh.</div></div>
+      </div>
+      <div id="result-detail"></div>
+      <div class="detail-ok">✓ Toposolid er lagt inn i den åpne Revit-modellen. Ingen import nødvendig.</div>
+    </div>
+
+    <div id="modal-error" class="modal-error" style="display:none">
+      <div class="error-mark">!</div>
+      <div class="result-head">Noe gikk galt</div>
+      <div id="error-text" class="error-text"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let punktData=null,pickMode=null,midMarker=null,nullMarker=null,utsnittLag=null;
+
+// ============================================================
+//  Bro mot Python-verten via WebView2 (erstatter fetch('/...'))
+// ============================================================
+let _pendingCalls={},_callId=0;
+function hostCall(action,payload){
+  return new Promise((resolve,reject)=>{
+    const id=++_callId;
+    _pendingCalls[id]={resolve,reject};
+    window.chrome.webview.postMessage(JSON.stringify({id,action,payload}));
+  });
+}
+window.chrome.webview.addEventListener('message',function(e){
+  let data;
+  try{ data=JSON.parse(e.data); }catch(err){ return; }
+  const pending=_pendingCalls[data.id];
+  if(!pending)return;
+  delete _pendingCalls[data.id];
+  if(data.result && data.result.error) pending.reject(new Error(data.result.error));
+  else pending.resolve(data.result);
+});
+
+let utsnittForm='kvadrat';   // 'kvadrat' | 'sirkel'
+
+function settUtsnittForm(verdi){
+  utsnittForm=verdi;
+  document.querySelectorAll('#utsnitt-segmented .segmented-btn').forEach(btn=>{
+    const aktiv=btn.dataset.value===verdi;
+    btn.classList.toggle('active',aktiv);
+    btn.setAttribute('aria-selected',aktiv?'true':'false');
+  });
+  oppdaterKart();
+}
+
+// Naturlige senterpunkt per sone (by/sted nærmest sonens sentralmeridian).
+// Brukes kun som fornuftig startpunkt — bruker justerer selv videre.
+// Enkelte nordlige soner (19–22, 26–28) mangler en kjent by nær sentralmeridianen
+// og bruker en interpolert posisjon (merket "(ca.)").
+const SENTER={
+  NTM05:{epsg:5105,lat:60.39,lon:5.32, navn:'Bergen'},
+  NTM06:{epsg:5106,lat:62.47,lon:6.15, navn:'Ålesund'},
+  NTM07:{epsg:5107,lat:63.11,lon:7.73, navn:'Kristiansund'},
+  NTM08:{epsg:5108,lat:58.15,lon:7.99, navn:'Kristiansand'},
+  NTM09:{epsg:5109,lat:59.21,lon:9.61, navn:'Skien'},
+  NTM10:{epsg:5110,lat:61.12,lon:10.47,navn:'Lillehammer'},
+  NTM11:{epsg:5111,lat:60.88,lon:11.56,navn:'Elverum'},
+  NTM12:{epsg:5112,lat:61.31,lon:12.27,navn:'Trysil'},
+  NTM13:{epsg:5113,lat:65.84,lon:13.19,navn:'Mosjøen'},
+  NTM14:{epsg:5114,lat:67.28,lon:14.40,navn:'Bodø'},
+  NTM15:{epsg:5115,lat:68.70,lon:15.42,navn:'Sortland'},
+  NTM16:{epsg:5116,lat:68.80,lon:16.54,navn:'Harstad'},
+  NTM17:{epsg:5117,lat:68.44,lon:17.43,navn:'Narvik'},
+  NTM18:{epsg:5118,lat:69.65,lon:18.96,navn:'Tromsø'},
+  NTM19:{epsg:5119,lat:69.69,lon:19.50,navn:'Nord-Troms (ca.)'},
+  NTM20:{epsg:5120,lat:69.76,lon:20.50,navn:'Lyngen-området (ca.)'},
+  NTM21:{epsg:5121,lat:69.84,lon:21.50,navn:'Vest-Finnmark (ca.)'},
+  NTM22:{epsg:5122,lat:69.91,lon:22.50,navn:'Alta-området (ca.)'},
+  NTM23:{epsg:5123,lat:70.66,lon:23.68,navn:'Hammerfest'},
+  NTM24:{epsg:5124,lat:70.06,lon:24.97,navn:'Lakselv'},
+  NTM25:{epsg:5125,lat:69.43,lon:25.80,navn:'Karasjok'},
+  NTM26:{epsg:5126,lat:69.48,lon:26.50,navn:'Tana-området (ca.)'},
+  NTM27:{epsg:5127,lat:69.55,lon:27.50,navn:'Tana-området (ca.)'},
+  NTM28:{epsg:5128,lat:69.62,lon:28.50,navn:'Varangerbotn-området (ca.)'},
+  NTM29:{epsg:5129,lat:70.07,lon:29.75,navn:'Vadsø'},
+  NTM30:{epsg:5130,lat:69.73,lon:30.05,navn:'Kirkenes'},
+  UTM32:{epsg:25832,lat:59.91,lon:10.75,navn:'Oslo (Sør-Norge)'},
+  UTM33:{epsg:25833,lat:67.28,lon:14.40,navn:'Bodø (Nordland/Troms)'},
+  UTM35:{epsg:25835,lat:70.66,lon:23.68,navn:'Hammerfest (Finnmark)'},
+};
+
+async function velgSone(){
+  const key=document.getElementById('sone-select').value;
+  const epselect=document.getElementById('epsg-select');
+  const nyEpsg=(key==='HPCS')?'hpcs':SENTER[key].epsg;
+
+  epselect.value=nyEpsg;
+  byttKoordinatsystem();   // oppdaterer kun hint/varsel/feltsynlighet
+
+  // Fly til Revit Base Point (allerede forhåndsutfylt av Python-verten)
+  // under den nye tolkningen av koordinatsystem — aldri overskriv verdiene.
+  const ne=parseFloat(document.getElementById('null-e').value);
+  const nn=parseFloat(document.getElementById('null-n').value);
+  if(!isNaN(ne)&&!isNaN(nn)){
+    try{
+      const rn=await hostCall('convert_to_wgs84',{e:ne,n:nn,epsg:nyEpsg});
+      map.flyTo([rn.lat,rn.lng],16);
+      if(!document.getElementById('mid-e').value){
+        document.getElementById('mid-e').value=ne.toFixed(3);
+        document.getElementById('mid-n').value=nn.toFixed(3);
+      }
+    }catch(e){ /* kartet blir staaende paa standardvisning hvis konvertering feiler */ }
+  }
+  document.getElementById('sone-overlay').classList.remove('open');
+  oppdaterKart();
+}
+
+function lukkSoneDialog(){
+  document.getElementById('sone-overlay').classList.remove('open');
+}
+
+const map=L.map('map',{zoomControl:true}).setView([70.664,23.682],14);
+
+// Kartlag: Satellitt (Esri + stedsnavn-overlay) og Papirkart (Kartverkets Turkart/toporaster)
+const lagEsri=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{attribution:'© Esri © Maxar © Earthstar Geographics',maxZoom:19});
+const lagStedsnavn=L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',{attribution:'© CartoDB',maxZoom:19,opacity:0.7});
+const lagPapirkart=L.tileLayer('https://cache.kartverket.no/v1/wmts/1.0.0/toporaster/default/webmercator/{z}/{y}/{x}.png',{attribution:'© Kartverket',maxZoom:18});
+
+let kartlagGruppe=L.layerGroup([lagEsri,lagStedsnavn]).addTo(map);   // standard: satellitt
+
+function settKartlag(valg){
+  map.removeLayer(kartlagGruppe);
+  kartlagGruppe=(valg==='papir')
+    ? L.layerGroup([lagPapirkart]).addTo(map)
+    : L.layerGroup([lagEsri,lagStedsnavn]).addTo(map);
+  document.querySelectorAll('#kartlag-segmented .segmented-btn').forEach(btn=>{
+    const aktiv=btn.dataset.value===valg;
+    btn.classList.toggle('active',aktiv);
+    btn.setAttribute('aria-selected',aktiv?'true':'false');
+  });
+}
+
+const mkIcon=(farge)=>L.divIcon({className:'',html:`<div style="width:12px;height:12px;background:${farge};border:2px solid #0f0f11;border-radius:50%;transform:translate(-50%,-50%)"></div>`,iconSize:[0,0]});
+
+map.on('mousemove',function(e){
+  document.getElementById('coord-display').innerHTML=`WGS84: <b>${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}</b>`;
+});
+
+map.on('click',async function(e){
+  if(!pickMode)return;
+  const epsg=document.getElementById('epsg-select').value;
+  const data=await hostCall('convert_wgs84',{lat:e.latlng.lat,lng:e.latlng.lng,epsg});
+  if(pickMode==='mid'){
+    document.getElementById('mid-e').value=data.e.toFixed(3);
+    document.getElementById('mid-n').value=data.n.toFixed(3);
+  } else {
+    document.getElementById('null-e').value=data.e.toFixed(3);
+    document.getElementById('null-n').value=data.n.toFixed(3);
+  }
+  deaktiverPick();
+  oppdaterKart();
+});
+
+function aktiverPick(mode){
+  pickMode=mode;
+  document.getElementById('pick-mid').classList.toggle('active',mode==='mid');
+  document.getElementById('pick-null').classList.toggle('active',mode==='null');
+  map.getContainer().style.cursor='crosshair';
+}
+function deaktiverPick(){
+  pickMode=null;
+  document.getElementById('pick-mid').classList.remove('active');
+  document.getElementById('pick-null').classList.remove('active');
+  map.getContainer().style.cursor='';
+}
+
+function sjekkTetthet(){
+  const felt=document.getElementById('tetthet');
+  const varsel=document.getElementById('tetthet-advarsel');
+  const lav=parseFloat(felt.value)<1;
+  felt.style.borderColor = lav ? '#facc15' : '';
+  felt.style.background  = lav ? 'rgba(250,204,21,.08)' : '';
+  varsel.style.display   = lav ? 'block' : 'none';
+}
+
+async function oppdaterKart(){
+  const epsg=document.getElementById('epsg-select').value;
+  const me=parseFloat(document.getElementById('mid-e').value);
+  const mn=parseFloat(document.getElementById('mid-n').value);
+  const ne=parseFloat(document.getElementById('null-e').value);
+  const nn=parseFloat(document.getElementById('null-n').value);
+  const r=parseFloat(document.getElementById('radius').value)||50;
+  const erSirkel=(utsnittForm==='sirkel');
+
+  if(midMarker)map.removeLayer(midMarker);
+  if(nullMarker)map.removeLayer(nullMarker);
+  if(utsnittLag)map.removeLayer(utsnittLag);
+
+  // Nullpunkt (Revit Base Point) er alltid kjent og tegnes uavhengig av midtpunkt
+  if(!isNaN(ne)&&!isNaN(nn)){
+    const rn=await hostCall('convert_to_wgs84',{e:ne,n:nn,epsg});
+    nullMarker=L.marker([rn.lat,rn.lng],{icon:mkIcon('#22d3ee')}).addTo(map).bindPopup(`Nullpunkt<br>E:${ne.toFixed(1)}, N:${nn.toFixed(1)}`);
+  }
+
+  if(isNaN(me)||isNaN(mn)){
+    document.getElementById('avstand-info').innerHTML='Avstand til midtpunkt: — (sett midtpunkt først)';
+    return;
+  }
+
+  // Avstand fra Revit Base Point til Toposolid-midtpunkt (i valgt koordinatsystem)
+  if(!isNaN(ne)&&!isNaN(nn)){
+    const dx=me-ne, dy=mn-nn;
+    const avstand=Math.sqrt(dx*dx+dy*dy);
+    document.getElementById('avstand-info').innerHTML=
+      `Avstand til midtpunkt: <b>${avstand.toFixed(2)} m</b> &nbsp; (ØX ${dx>=0?'+':''}${dx.toFixed(2)}, NY ${dy>=0?'+':''}${dy.toFixed(2)})`;
+  }
+
+  const hjørner = erSirkel ? [] : [
+    {e:me-r,n:mn-r},{e:me+r,n:mn-r},{e:me+r,n:mn+r},{e:me-r,n:mn+r}
+  ];
+
+  const [rm,...rh]=await Promise.all([
+    hostCall('convert_to_wgs84',{e:me,n:mn,epsg}),
+    ...hjørner.map(h=>hostCall('convert_to_wgs84',{e:h.e,n:h.n,epsg})),
+  ]);
+
+  midMarker=L.marker([rm.lat,rm.lng],{icon:mkIcon('#4ade80')}).addTo(map).bindPopup(`Midtpunkt<br>E:${me.toFixed(1)}, N:${mn.toFixed(1)}`);
+
+  if(erSirkel){
+    utsnittLag=L.circle([rm.lat,rm.lng],{radius:r,color:'#4ade80',fillColor:'#4ade80',fillOpacity:.08,weight:1}).addTo(map);
+  } else {
+    const punkterLatLng=rh.map(p=>[p.lat,p.lng]);
+    utsnittLag=L.polygon(punkterLatLng,{color:'#4ade80',fillColor:'#4ade80',fillOpacity:.08,weight:1}).addTo(map);
+  }
+}
+
+function aapneModal(){
+  const ov=document.getElementById('modal-overlay');
+  ov.classList.add('open');
+  document.getElementById('modal-loading').style.display='flex';
+  document.getElementById('modal-result').style.display='none';
+  document.getElementById('modal-error').style.display='none';
+}
+function lukkModal(){
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+function visResultat(data){
+  document.getElementById('modal-loading').style.display='none';
+  document.getElementById('modal-error').style.display='none';
+  document.getElementById('modal-result').style.display='block';
+  document.getElementById('r-antall').textContent=data.antall;
+  document.getElementById('r-min').textContent=data.min_z.toFixed(2);
+  document.getElementById('r-max').textContent=data.max_z.toFixed(2);
+  let html='';
+  if(typeof data.nn54_offset!=='undefined'){
+    html+=`<div class="detail-ok">NN54-korreksjon anvendt: ${data.nn54_offset>=0?'+':''}${data.nn54_offset.toFixed(4)} m</div>`;
+  }
+  if(data.warning){
+    html+=`<div class="detail-warn">⚠ ${data.warning}</div>`;
+  }
+  document.getElementById('result-detail').innerHTML=html;
+}
+function visFeil(msg){
+  document.getElementById('modal-loading').style.display='none';
+  document.getElementById('modal-result').style.display='none';
+  document.getElementById('modal-error').style.display='block';
+  document.getElementById('error-text').textContent=msg;
+}
+
+async function kjor(){
+  const btn=document.getElementById('run-btn');
+  btn.disabled=true;btn.textContent='Bygger Toposolid...';
+  aapneModal();
+
+  const _selval=document.getElementById('epsg-select').value;
+  const payload={
+    epsg:(_selval==='hpcs'?'hpcs':parseInt(_selval)),
+    vert:(_selval==='hpcs'?parseFloat(document.getElementById('vert').value):0),
+    nn54_korr:(_selval==='hpcs'&&document.getElementById('nn54-korr').checked),
+    mid_e:parseFloat(document.getElementById('mid-e').value),
+    mid_n:parseFloat(document.getElementById('mid-n').value),
+    null_e:parseFloat(document.getElementById('null-e').value),
+    null_n:parseFloat(document.getElementById('null-n').value),
+    radius:parseFloat(document.getElementById('radius').value),
+    tetthet:parseFloat(document.getElementById('tetthet').value),
+    relativ_z:document.getElementById('relativ-z').checked,
+    utsnitt_form:utsnittForm,
+  };
+
+  try{
+    const data=await hostCall('lag_toposolid',payload);
+    visResultat(data);
+  }catch(e){visFeil(e.message);}
+  btn.disabled=false;btn.textContent='Lag Toposolid';
+}
+
+
+// --- UTM-tilgjengelegheit ---
+const UTM_EKSEMPEL={
+  25832:{mid_e:488292,mid_n:6698500,null_e:488000,null_n:6698000},  // Bergen-området
+  25833:{mid_e:597350,mid_n:6644800,null_e:597000,null_n:6644000},  // Oslo-området
+  25835:{mid_e:479850,mid_n:7728100,null_e:479600,null_n:7728000},  // Tromsø-området
+};
+const UTM_HINT={
+  25832:'E: 250\u2009000\u2013700\u2009000 m \u00b7 N: 6\u2009400\u2009000\u20137\u2009900\u2009000 m',
+  25833:'E: 350\u2009000\u2013750\u2009000 m \u00b7 N: 6\u2009400\u2009000\u20137\u2009900\u2009000 m',
+  25835:'E: 250\u2009000\u2013600\u2009000 m \u00b7 N: 6\u2009800\u2009000\u20137\u2009900\u2009000 m',
+};
+const NTM_HINT='E: 50\u2009000\u2013150\u2009000 m \u00b7 N: 6\u2009400\u2009000\u20137\u2009900\u2009000 m';
+let forrigeCRSType='NTM';
+
+function getCRSType(epsg){
+  if(String(epsg).toLowerCase()==='hpcs')return'HPCS';
+  const e=parseInt(epsg);
+  return(e>=5105&&e<=5130)?'NTM':'UTM';
+}
+
+function oppdaterHint(){
+  const rawval=document.getElementById('epsg-select').value;
+  const epsg=parseInt(rawval);
+  const type=getCRSType(rawval);
+  const sel=document.getElementById('epsg-select');
+  const selTekst=sel.options[sel.selectedIndex].text.split('\u2014')[0].trim();
+  const hint=document.getElementById('crs-hint');
+  const btn=document.getElementById('eksempel-btn');
+  document.getElementById('crs-warn').style.display='none';
+  if(type==='HPCS'){
+    hint.style.borderLeftColor='var(--accent2)';
+    hint.innerHTML=`<b style="color:var(--accent2)">HPCS \u2014 Melk\u00f8ya</b> &nbsp; Lokalt anleggssystem (Hammerfest LNG). Nullpunkt 0,0 = anleggets origo. Z = DTM (NN2000) + 95 m (NN54+95). Rotasjon \u221237\u00b0.`;
+    btn.style.display='none';
+  } else if(type==='UTM'){
+    hint.style.borderLeftColor='var(--accent2)';
+    hint.innerHTML=`<b style="color:var(--accent2)">${selTekst}</b> &nbsp; ${UTM_HINT[epsg]||''}`;
+    btn.style.display='block';
+  } else {
+    hint.style.borderLeftColor='var(--border)';
+    hint.innerHTML=`<b style="color:var(--text)">${selTekst}</b> &nbsp; ${NTM_HINT}`;
+    btn.style.display='none';
+  }
+}
+
+function byttKoordinatsystem(){
+  const rawval=document.getElementById('epsg-select').value;
+  const nyType=getCRSType(rawval);
+  const vertField=document.getElementById('vert-field');
+  if(nyType==='HPCS'){
+    vertField.style.display='';
+    document.getElementById('nn54-field').style.display='';
+    if(!document.getElementById('vert').value) document.getElementById('vert').value=95;
+    document.getElementById('crs-warn').style.display='none';
+    forrigeCRSType='HPCS';
+    oppdaterHint();
+    oppdaterKart();
+    return;
+  }
+  vertField.style.display='none';
+  document.getElementById('nn54-field').style.display='none';
+  const typeByttet=nyType!==forrigeCRSType;
+  forrigeCRSType=nyType;
+  oppdaterHint();
+  if(typeByttet){
+    const warn=document.getElementById('crs-warn');
+    const melding=nyType==='UTM'
+      ?'\u26a0 Byttet til UTM \u2014 koordinatene er i et annet format enn NTM. Bruk knappen nedenfor for eksempelkoordinater.'
+      :'\u26a0 Byttet til NTM \u2014 husk \u00e5 oppdatere koordinatene (NTM-\u00f8st er typisk 50\u2013150\u2009000 m, ikke UTM-verdier).';
+    warn.textContent=melding;
+    warn.style.cssText='font-size:10px;padding:6px 10px;background:rgba(248,113,113,.08);border:1px solid var(--danger);border-radius:5px;color:var(--danger);margin-top:4px;display:block';
+  }
+  oppdaterKart();
+}
+
+function brukEksempel(){
+  const epsg=parseInt(document.getElementById('epsg-select').value);
+  const eks=UTM_EKSEMPEL[epsg];
+  if(!eks)return;
+  document.getElementById('mid-e').value=eks.mid_e;
+  document.getElementById('mid-n').value=eks.mid_n;
+  document.getElementById('crs-warn').style.display='none';
+  oppdaterKart();
+}
+// --- /UTM-tilgjengelegheit ---
+
+document.getElementById('modal-overlay').addEventListener('click',function(e){if(e.target===this)lukkModal();});
+document.getElementById('sone-overlay').addEventListener('click',function(e){if(e.target===this)lukkSoneDialog();});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){lukkModal();lukkSoneDialog();}});
+
+oppdaterHint();
+oppdaterKart();
+sjekkTetthet();
+</script>
+</body>
+</html>
