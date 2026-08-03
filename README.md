@@ -2,107 +2,144 @@
 
 Henter høydedata fra Kartverket og oppretter Toposolid direkte i den åpne
 Revit-modellen. Project Base Point leses automatisk inn som nullpunkt —
-du trenger kun å sette midtpunkt, radius og punkttetthet, og trykke
+du setter kun midtpunkt, radius og punkttetthet, og trykker
 **"Lag Toposolid"**.
 
 Ingen nedlasting av filer, ingen manuell import, ingen kjørende
 Flask-server. Alt skjer inne i Revit.
 
+Krever **Revit 2024 eller nyere** (Toposolid finnes ikke i eldre versjoner).
+
 ---
 
 ## Engangsoppsett
 
-Dette gjøres én gang per PC/installasjon, ikke hver gang du bruker knappen.
+Dette gjøres én gang per PC, ikke hver gang du bruker knappen. Regn med
+15–20 minutter første gang.
 
-### 1. Installer PyRevit (hvis ikke allerede gjort)
+### 1. Installer PyRevit
 
-Last ned og installer fra [pyrevitlabs.io](https://pyrevitlabs.io) hvis du
-ikke allerede har det.
+Last ned fra [pyrevitlabs.io](https://pyrevitlabs.io) hvis du ikke
+allerede har det.
 
-### 2. Kopier utvidelsen inn i PyRevit
+### 2. Hent ned dette repoet
 
-Kopier hele mappen `KartverketToposolid.extension` inn i PyRevit sin
-extensions-mappe. Standard plassering er:
-
+```powershell
+cd Dokumenter
+mkdir GitRepos
+cd GitRepos
+git clone https://github.com/Nordmo/KartverketToposolid.git
 ```
-%APPDATA%\pyRevit\Extensions\
-```
 
-(Du kan også finne riktig mappe via pyRevit-fanen → **Settings** →
-**Custom Extension Directories**, eller legge til denne mappen som en
-egen extension-katalog derfra i stedet for å kopiere.)
+### 3. Koble mappen til PyRevit
 
-### 3. Installer Python-pakker i PyRevit sin CPython-motor
+I Revit: **pyRevit**-fanen → **Settings** → **Custom Extension
+Directories** → legg til stien til mappen du klonet
+(`...\GitRepos\KartverketToposolid`, altså mappen som *inneholder*
+`.extension`-mappen).
 
-Scriptet bruker `#! python3`-direktivet øverst, som forteller PyRevit å
-kjøre det med CPython i stedet for IronPython. Dette gir tilgang til
-pip-installerte pakker.
+Lukk innstillingene, trykk **Reload** på pyRevit-fanen. Knappen **"Lag
+Toposolid"** skal nå dukke opp under fanen **KartverketToposolid** →
+panelet **DTM**.
 
-Åpne en terminal og kjør (bytt ut stien med din faktiske CPython-motor —
-finnes normalt under `%APPDATA%\pyRevit-Master\bin\` eller tilsvarende;
-se pyRevit sin dokumentasjon for **CPython engine** for eksakt sti på
-din installasjon):
-
-```
-"<sti-til-pyrevit-cpython>\python.exe" -m pip install rasterio numpy pyproj requests
-```
+Trykker du på den nå, feiler den — det er forventet. To ting gjenstår.
 
 ### 4. Hent WebView2-komponentene
 
-Disse er .NET-sammenstillinger (ikke pip-pakker) og må hentes separat via
-NuGet:
+Disse er .NET-filer (ikke pip-pakker) og må hentes separat via NuGet:
 
 1. Gå til [nuget.org/packages/Microsoft.Web.WebView2](https://www.nuget.org/packages/Microsoft.Web.WebView2)
-2. Last ned `.nupkg`-filen (den er egentlig en zip-fil — endre
-   filendelsen til `.zip` og pakk ut, eller bruk 7-Zip direkte)
-3. Finn disse tre filene inne i den utpakkede pakken (under en mappe som
-   `runtimes\win-x64\native\` og `lib\net462\` eller `lib\netcoreapp3.0\`):
+2. Trykk **Download package** — du får en `.nupkg`-fil
+3. Endre filendelsen fra `.nupkg` til `.zip`, pakk ut
+4. Finn disse tre filene (typisk under `lib\net462\` og
+   `runtimes\win-x64\native\` — bruk **net462**, ikke `netcoreapp`/`net6.0`,
+   siden Revit er en .NET Framework-vert):
    - `Microsoft.Web.WebView2.Core.dll`
    - `Microsoft.Web.WebView2.Wpf.dll`
-   - `WebView2Loader.dll` (x64-versjonen)
-4. Kopier alle tre inn i:
+   - `WebView2Loader.dll`
+5. Kopier alle tre inn i:
    ```
    KartverketToposolid.extension\KartverketToposolid.tab\DTM.panel\LagToposolid.pushbutton\
    ```
-   (samme mappe som `script.py` og `ui.html`)
 
-### 5. Sjekk at WebView2 Runtime er installert
+Sjekk også at **WebView2 Runtime** er installert (de fleste Windows
+10/11-maskiner har den fra før via Edge) — test ved å åpne
+`https://go.microsoft.com/fwlink/p/?LinkId=2124703` i nettleseren.
 
-De aller fleste Windows 10/11-maskiner har dette allerede (følger med
-Edge). Test ved å åpne:
+### 5. Installer Python-pakker i RIKTIG Python-miljø
+
+Dette er det steget som lettest går galt, så følg det nøye.
+
+**Finn ut hvilken Python-versjon PyRevit sin CPython-motor bruker.**
+Åpne
 ```
-https://go.microsoft.com/fwlink/p/?LinkId=2124703
+%APPDATA%\pyRevit-Master\bin\cengines\
 ```
-Hvis maskinen mangler runtime, laster denne siden ned installasjonsfilen
-("Evergreen Bootstrapper") — kjør den, krever normalt ikke
-administrator-rettigheter.
+og se hvilken mappe som ligger der — navnet forteller versjonen, f.eks.
+`CPY3123` betyr Python **3.12.3**. Skriv ned hovedversjonen (3.12, 3.11,
+osv.) — dette er avgjørende, siden `numpy` og `rasterio` inneholder
+kompilert kode som er versjonsspesifikk.
 
-### 6. Last inn PyRevit på nytt
+**Sjekk om du allerede har en Python-installasjon med samme
+hovedversjon:**
+```powershell
+python --version
+```
 
-I Revit: pyRevit-fanen → **Reload**. Knappen **"Lag Toposolid"** skal nå
-dukke opp under fanen **KartverketToposolid → DTM**.
+- **Stemmer hovedversjonen** (f.eks. begge er 3.12.x) → bruk den direkte
+  i kommandoen under.
+- **Stemmer ikke** (eller ingen Python installert) → last ned riktig
+  versjon fra
+  [python.org/downloads/release](https://www.python.org/downloads/release/)
+  (søk opp riktig hovedversjon, f.eks. "Python 3.12"). **NB:** eldre
+  3.12.x-delversjoner (nyere enn 3.12.10) har ofte kun kildekode uten
+  Windows-installer — sjekk at det faktisk finnes en
+  "Windows installer (64-bit)" på nedlastingssiden, ellers gå én
+  delversjon ned. Under installasjon: **ikke** huk av "Add to PATH".
+
+**Installer pakkene rett inn i PyRevit sin `site-packages`-mappe** (ikke
+i din vanlige Python sin egen):
+```powershell
+python -m pip install --target "%APPDATA%\pyRevit-Master\site-packages" numpy rasterio pyproj
+```
+(bytt ut `python` med full sti til riktig `python.exe` hvis du måtte
+installere en egen versjon ved siden av, f.eks.
+`"C:\Users\<bruker>\AppData\Local\Programs\Python\Python312\python.exe"`)
+
+### 6. Test
+
+1. **Restart Revit helt** (ikke bare Reload — luk hele programmet,
+   sjekk i Oppgavebehandling at `Revit.exe` er borte)
+2. Åpne et prosjekt med **Project Base Point** satt (tallene under
+   Manage → Coordinates skal vise ekte E/N-verdier, ikke 0)
+3. Trykk **Lag Toposolid**
+4. Vinduet åpnes med nullpunktet forhåndsutfylt — velg koordinatsystem,
+   sett midtpunkt (klikk i kartet eller skriv inn), radius og
+   punkttetthet, trykk **"Lag Toposolid"**
 
 ---
 
-## Kjent usikkerhet — les dette før du tester
+## Feilsøking
 
-`script.py` er skrevet etter beste kunnskap om Revit API, men er **ikke
-testet mot en ekte Revit-installasjon**. Den mest usikre delen er
-funksjonen `opprett_toposolid()`, som kaller `Toposolid.Create(...)`.
-Toposolid ble introdusert i Revit 2024, og den eksakte signaturen til
-denne metoden bør du dobbeltsjekke — enklest med
-[RevitLookup](https://github.com/jeremytammik/RevitLookup) eller Revit
-2026 sin API-dokumentasjon, hvis du får en feilmelding her.
+Scriptet er bygget med tydelig, presis feilrapportering — feiler noe,
+forteller dialogboksen nøyaktig hvilket steg som feilet, og pyRevit sin
+**Output-konsoll** (synlig i samme vindu) viser full detalj under.
 
-Andre ting som er verdt å sjekke om noe oppfører seg uventet:
-- At `OST_ProjectBasePoint`-kategorien faktisk gir deg Project Base
-  Point (ikke Survey Point) i din Revit-versjon.
-- At `Position`-egenskapen på Base Point-elementet gir koordinatene du
-  forventer (sammenlign med tallene i **Manage → Coordinates**).
+De vanligste feilene og løsningene er allerede håndtert i koden basert
+på reell feilsøking:
+- **WebView2-relaterte feil ved andre forsøk i samme økt** → restart
+  Revit helt, ikke bare Reload
+- **"No module named X"** → feil Python-miljø i steg 5, dobbeltsjekk at
+  hovedversjonen faktisk stemmer med PyRevit sin CPython-motor
+- **"Name must be unique"** ved gjentatt bruk → skal ikke lenger skje
+  (fikset ved å navngi opprettede Level ut fra kote)
 
-Alt annet i scriptet (Kartverket-integrasjon, HPCS/NN54-korreksjon,
-kart-UI) er direkte portert fra en fullt fungerende og testet
-frittstående nettapp-versjon, og skal fungere identisk.
+Skulle noe likevel feile på selve `Toposolid.Create(...)`-linjen i
+`opprett_toposolid()` i `script.py` — dette er den ene delen av koden
+som ikke er 100 % fremtidssikker mot fremtidige Revit API-endringer.
+Sjekk signaturen med [RevitLookup](https://github.com/jeremytammik/RevitLookup)
+eller Revit sin API-dokumentasjon hvis den slutter å virke etter en
+Revit-oppdatering.
 
 ---
 
@@ -116,7 +153,9 @@ KartverketToposolid.extension/
             ├── bundle.yaml
             ├── script.py
             ├── ui.html
-            ├── Microsoft.Web.WebView2.Core.dll   ← du legger til denne
-            ├── Microsoft.Web.WebView2.Wpf.dll    ← du legger til denne
-            └── WebView2Loader.dll                ← du legger til denne
+            ├── icon.png                          ← egen logo
+            ├── icon.dark.png                      ← mørk temavariant
+            ├── Microsoft.Web.WebView2.Core.dll   ← hentes i steg 4
+            ├── Microsoft.Web.WebView2.Wpf.dll    ← hentes i steg 4
+            └── WebView2Loader.dll                ← hentes i steg 4
 ```
