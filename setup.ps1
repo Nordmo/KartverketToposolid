@@ -42,24 +42,66 @@ if (-not (Test-Path $PushbuttonDir)) {
 # ============================================================
 Skriv-Steg "Sjekker pyRevit sin CPython-motor"
 
-$cengineRoot = "$env:APPDATA\pyRevit-Master\bin\cengines"
-if (-not (Test-Path $cengineRoot)) {
-    Write-Error "Fant ikke $cengineRoot - er pyRevit installert, og er CPython-motoren aktivert (pyRevit-fanen -> Settings)?"
+# PyRevit-installasjonen kan hete hva som helst (f.eks. "pyRevit-Master",
+# "pyRevit", eller et selvvalgt navn), OG kan ligge to ulike steder
+# avhengig av installasjonstype:
+#   - Brukerinstallasjon: %APPDATA%  (vanligst ved egen installasjon)
+#   - Admin-installasjon: Program Files  (vanlig ved sentral IT-utrulling)
+# Vi soeker gjennom begge i stedet for aa anta noen av delene.
+$soekeStier = @($env:APPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { $_ }
+$cloneRoot = $null
+$cengineDir = $null
+
+foreach ($rot in $soekeStier) {
+    if ($cloneRoot -or -not (Test-Path $rot)) { continue }
+    Get-ChildItem $rot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        if (-not $cloneRoot) {
+            $kandidat = Join-Path $_.FullName "bin\cengines"
+            if (Test-Path $kandidat) {
+                $funnetMotor = Get-ChildItem $kandidat -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -like "CPY*" } | Select-Object -First 1
+                if ($funnetMotor) {
+                    $cloneRoot = $_.FullName
+                    $cengineDir = $funnetMotor
+                }
+            }
+        }
+    }
+}
+
+if (-not $cloneRoot) {
+    Write-Error "Fant ingen pyRevit-installasjon med en CPython-motor under $($soekeStier -join ' eller '). Sjekk at pyRevit er installert, og at 'Active CPython Engine' viser et valg i pyRevit-fanen -> Settings (se README)."
     exit 1
 }
-$cengineDir = Get-ChildItem $cengineRoot -Directory | Where-Object { $_.Name -like "CPY*" } | Select-Object -First 1
-if (-not $cengineDir) {
-    Write-Error "Fant ingen CPython-motor under $cengineRoot. Aktiver CPython-motoren i pyRevit sine innstillinger foerst."
-    exit 1
-}
+
 $verDigits = $cengineDir.Name -replace "CPY", ""      # f.eks "3123"
 $major = $verDigits.Substring(0, 1)
 $minor = $verDigits.Substring(1, 2)
 $maalVersjon = "$major.$minor"
+Write-Host "Fant pyRevit-installasjon: $cloneRoot"
 Write-Host "PyRevit bruker Python $maalVersjon (motor: $($cengineDir.Name))"
 
-$sitePackages = "$env:APPDATA\pyRevit-Master\site-packages"
-New-Item -ItemType Directory -Force -Path $sitePackages | Out-Null
+$sitePackages = Join-Path $cloneRoot "site-packages"
+
+try {
+    New-Item -ItemType Directory -Force -Path $sitePackages -ErrorAction Stop | Out-Null
+    $testFil = Join-Path $sitePackages ".skrivetest-$(Get-Random)"
+    New-Item -ItemType File -Path $testFil -ErrorAction Stop | Out-Null
+    Remove-Item $testFil -Force -ErrorAction SilentlyContinue
+} catch {
+    Write-Error (
+        "Har ikke skrive-tilgang til $sitePackages`n" +
+        "Dette skjer ofte naar pyRevit er installert sentralt av IT til " +
+        "'Program Files', som normalt er skrivebeskyttet for vanlige " +
+        "brukere. Proev en av disse:`n" +
+        "  1. Hoyreklikk PowerShell -> 'Kjor som administrator', kjor " +
+        "setup.ps1 paa nytt derfra (kun for dette ene steget)`n" +
+        "  2. Be IT-avdelingen gi deg skrive-tilgang til denne mappen`n" +
+        "  3. Be IT installere pyRevit paa nytt som brukerinstallasjon " +
+        "(uten admin-rettigheter), som installerer til %APPDATA% i stedet"
+    )
+    exit 1
+}
 
 # ============================================================
 #  2. Finn en lokal Python med samme hovedversjon
@@ -155,47 +197,75 @@ Write-Host "Bruker: $pythonExe" -ForegroundColor Green
 # ============================================================
 #  3. Installer numpy/rasterio/pyproj i pyRevit sin site-packages
 # ============================================================
-Skriv-Steg "Installerer numpy, rasterio, pyproj"
+Skriv-Steg "Sjekker numpy, rasterio, pyproj"
 
-& $pythonExe -m pip install --target $sitePackages numpy rasterio pyproj
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "pip install feilet - se meldingen over."
-    exit 1
+$paakrevdePakker = @("numpy", "rasterio", "pyproj")
+$alleredeInstallert = $true
+foreach ($pakke in $paakrevdePakker) {
+    if (-not (Test-Path (Join-Path $sitePackages $pakke))) {
+        $alleredeInstallert = $false
+        break
+    }
 }
-Write-Host "Pakker installert i $sitePackages" -ForegroundColor Green
+
+if ($alleredeInstallert) {
+    Write-Host "numpy, rasterio og pyproj ser allerede ut til å være installert - hopper over." -ForegroundColor Green
+} else {
+    Write-Host "Installerer numpy, rasterio, pyproj ..."
+    & $pythonExe -m pip install --target $sitePackages numpy rasterio pyproj
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "pip install feilet - se meldingen over."
+        exit 1
+    }
+    Write-Host "Pakker installert i $sitePackages" -ForegroundColor Green
+}
 
 # ============================================================
 #  4. Hent WebView2-komponentene automatisk fra NuGet
 # ============================================================
-Skriv-Steg "Henter WebView2-komponenter fra NuGet"
+Skriv-Steg "Sjekker WebView2-komponenter"
 
-$webview2Versjon = "1.0.4078.44"
-$nupkgUrl = "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/$webview2Versjon"
-$tempDir = Join-Path $env:TEMP "webview2_nuget_$(Get-Random)"
-New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
-$nupkgPath = Join-Path $tempDir "webview2.zip"
-
-try {
-    Invoke-WebRequest -Uri $nupkgUrl -OutFile $nupkgPath
-    Expand-Archive -Path $nupkgPath -DestinationPath $tempDir -Force
-
-    $coreDll = Get-ChildItem $tempDir -Recurse -Filter "Microsoft.Web.WebView2.Core.dll" |
-        Where-Object { $_.FullName -like "*net462*" } | Select-Object -First 1
-    $wpfDll = Get-ChildItem $tempDir -Recurse -Filter "Microsoft.Web.WebView2.Wpf.dll" |
-        Where-Object { $_.FullName -like "*net462*" } | Select-Object -First 1
-    $loaderDll = Get-ChildItem $tempDir -Recurse -Filter "WebView2Loader.dll" |
-        Where-Object { $_.FullName -like "*win-x64*" } | Select-Object -First 1
-
-    if (-not $coreDll -or -not $wpfDll -or -not $loaderDll) {
-        throw "Fant ikke alle tre filene i NuGet-pakken. Sjekk mappestrukturen manuelt i: $tempDir"
+$dllFiler = @("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.Wpf.dll", "WebView2Loader.dll")
+$alleDllFinnes = $true
+foreach ($dll in $dllFiler) {
+    if (-not (Test-Path (Join-Path $PushbuttonDir $dll))) {
+        $alleDllFinnes = $false
+        break
     }
+}
 
-    Copy-Item $coreDll.FullName -Destination $PushbuttonDir -Force
-    Copy-Item $wpfDll.FullName -Destination $PushbuttonDir -Force
-    Copy-Item $loaderDll.FullName -Destination $PushbuttonDir -Force
-    Write-Host "WebView2-filer kopiert til pushbutton-mappen." -ForegroundColor Green
-} finally {
-    Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+if ($alleDllFinnes) {
+    Write-Host "WebView2-filene finnes allerede i pushbutton-mappen - hopper over." -ForegroundColor Green
+} else {
+    Write-Host "Henter WebView2-komponenter fra NuGet ..."
+    $webview2Versjon = "1.0.4078.44"
+    $nupkgUrl = "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/$webview2Versjon"
+    $tempDir = Join-Path $env:TEMP "webview2_nuget_$(Get-Random)"
+    New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+    $nupkgPath = Join-Path $tempDir "webview2.zip"
+
+    try {
+        Invoke-WebRequest -Uri $nupkgUrl -OutFile $nupkgPath
+        Expand-Archive -Path $nupkgPath -DestinationPath $tempDir -Force
+
+        $coreDll = Get-ChildItem $tempDir -Recurse -Filter "Microsoft.Web.WebView2.Core.dll" |
+            Where-Object { $_.FullName -like "*net462*" } | Select-Object -First 1
+        $wpfDll = Get-ChildItem $tempDir -Recurse -Filter "Microsoft.Web.WebView2.Wpf.dll" |
+            Where-Object { $_.FullName -like "*net462*" } | Select-Object -First 1
+        $loaderDll = Get-ChildItem $tempDir -Recurse -Filter "WebView2Loader.dll" |
+            Where-Object { $_.FullName -like "*win-x64*" } | Select-Object -First 1
+
+        if (-not $coreDll -or -not $wpfDll -or -not $loaderDll) {
+            throw "Fant ikke alle tre filene i NuGet-pakken. Sjekk mappestrukturen manuelt i: $tempDir"
+        }
+
+        Copy-Item $coreDll.FullName -Destination $PushbuttonDir -Force
+        Copy-Item $wpfDll.FullName -Destination $PushbuttonDir -Force
+        Copy-Item $loaderDll.FullName -Destination $PushbuttonDir -Force
+        Write-Host "WebView2-filer kopiert til pushbutton-mappen." -ForegroundColor Green
+    } finally {
+        Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # ============================================================
