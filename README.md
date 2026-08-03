@@ -38,18 +38,20 @@ Et mørkt tekstvindu åpner seg. Lim inn (eller skriv) kommandoene under,
 én linje om gangen, og trykk Enter etter hver:
 
 ```powershell
-cd $env:USERPROFILE
+cd ([Environment]::GetFolderPath("MyDocuments"))
 mkdir GitRepos -ErrorAction SilentlyContinue
 cd GitRepos
 git clone https://github.com/Nordmo/KartverketToposolid.git
 ```
 
-`$env:USERPROFILE` peker alltid rett til din egen brukermappe (f.eks.
-`C:\Users\<dittnavn>`), uansett hvor PowerShell tilfeldigvis åpnet seg
-(noen ganger åpnes den i `C:\WINDOWS\system32` i stedet — da vil vanlig
-`cd Dokumenter` feile). `-ErrorAction SilentlyContinue` gjør at
-`mkdir`-linjen ikke klager hvis mappen allerede finnes fra en tidligere
-kjøring.
+`[Environment]::GetFolderPath("MyDocuments")` spør Windows direkte om
+hvor "Dokumenter" faktisk ligger *akkurat nå* — i stedet for å gjette
+på et mappenavn. Dette fungerer riktig uansett om PowerShell åpnet et
+uventet sted (som `C:\WINDOWS\system32`), og uansett om "Dokumenter" er
+omdirigert til OneDrive (vanlig i bedrifts-oppsett, f.eks.
+`C:\Users\<navn>\OneDrive - Multiconsult\Documents`) eller ligger lokalt
+som vanlig. `-ErrorAction SilentlyContinue` gjør at `mkdir`-linjen ikke
+klager hvis mappen allerede finnes fra en tidligere kjøring.
 
 **Har du ikke Git installert**, feiler siste linje med en melding om at
 `git` ikke er en kjent kommando. Last ned og installer Git fra
@@ -57,9 +59,11 @@ kjøring.
 i installasjonsveiviseren er fine), lukk og åpne PowerShell på nytt, og
 prøv igjen.
 
-Etter at kommandoene er kjørt, ligger repoet i:
-```
-C:\Users\<ditt-brukernavn>\GitRepos\KartverketToposolid
+Etter at kommandoene er kjørt, ligger repoet i `GitRepos\KartverketToposolid`
+inni din faktiske Dokumenter-mappe (lokal eller OneDrive-omdirigert).
+Usikker på nøyaktig sti? Kjør denne i PowerShell for å se den:
+```powershell
+[Environment]::GetFolderPath("MyDocuments")
 ```
 
 ### 3. Koble mappen til PyRevit
@@ -86,7 +90,7 @@ Krever ingen administrator-rettigheter.
 Åpne PowerShell (se fremgangsmåte i del 2 hvis du har lukket det
 vinduet siden sist), naviger til mappen du klonet, og kjør:
 ```powershell
-cd $env:USERPROFILE\GitRepos\KartverketToposolid
+cd (Join-Path ([Environment]::GetFolderPath("MyDocuments")) "GitRepos\KartverketToposolid")
 ```
 Deretter:
 ```powershell
