@@ -225,6 +225,18 @@ __UTM_SONE_OPTIONS__
   </div>
 </div>
 
+<div id="midtpunkt-hint-overlay" class="modal-overlay">
+  <div class="glass-dialog" style="width:min(380px,88vw);text-align:center">
+    <div class="result-check" style="background:rgba(74,222,128,.15);border-color:rgba(74,222,128,.5);color:var(--accent)">📍</div>
+    <div class="result-head">Sett midtpunktet ditt</div>
+    <div class="loading-sub" style="margin-bottom:18px;line-height:1.6">
+      <span style="color:var(--accent2)">●</span> Nullpunktet er ditt Revit Base Point — hentet automatisk, ikke noe du trenger å røre.<br><br>
+      <span style="color:var(--accent)">●</span> Midtpunktet er <b>der terrenget skal hentes ut</b> — klikk hvor som helst i kartet for å plassere det.
+    </div>
+    <button id="run-btn" onclick="lukkMidtpunktHint()">Skjønner — la meg klikke i kartet</button>
+  </div>
+</div>
+
 <div id="modal-overlay" class="modal-overlay">
   <div class="glass-dialog">
     <button class="modal-close" onclick="lukkModal()" aria-label="Lukk">&times;</button>
@@ -337,24 +349,40 @@ async function velgSone(){
 
   // Fly til Revit Base Point (allerede forhåndsutfylt av Python-verten)
   // under den nye tolkningen av koordinatsystem — aldri overskriv verdiene.
+  // Midtpunktet forblir BEVISST tomt her (ikke auto-utfylt fra nullpunktet)
+  // slik at brukeren aktivt må velge det selv — se instruksjonsdialogen
+  // som vises rett under.
   const ne=parseFloat(document.getElementById('null-e').value);
   const nn=parseFloat(document.getElementById('null-n').value);
   if(!isNaN(ne)&&!isNaN(nn)){
     try{
       const rn=await hostCall('convert_to_wgs84',{e:ne,n:nn,epsg:nyEpsg});
       map.flyTo([rn.lat,rn.lng],16);
-      if(!document.getElementById('mid-e').value){
-        document.getElementById('mid-e').value=ne.toFixed(3);
-        document.getElementById('mid-n').value=nn.toFixed(3);
-      }
     }catch(e){ /* kartet blir staaende paa standardvisning hvis konvertering feiler */ }
   }
   document.getElementById('sone-overlay').classList.remove('open');
   oppdaterKart();
+  visMidtpunktHintForsinket();
 }
 
 function lukkSoneDialog(){
   document.getElementById('sone-overlay').classList.remove('open');
+  visMidtpunktHintForsinket();
+}
+
+function visMidtpunktHintForsinket(){
+  // Kort forsinkelse slik at boksen dukker opp ETTER at kartets
+  // flyTo-animasjon visuelt har roet seg, ikke midt i bevegelsen.
+  setTimeout(function(){
+    if(!document.getElementById('mid-e').value){
+      document.getElementById('midtpunkt-hint-overlay').classList.add('open');
+    }
+  }, 1200);
+}
+
+function lukkMidtpunktHint(){
+  document.getElementById('midtpunkt-hint-overlay').classList.remove('open');
+  aktiverPick('mid');   // klar til aa klikke i kartet med en gang
 }
 
 const map=L.map('map',{zoomControl:true}).setView([70.664,23.682],14);
@@ -620,7 +648,8 @@ function brukEksempel(){
 
 document.getElementById('modal-overlay').addEventListener('click',function(e){if(e.target===this)lukkModal();});
 document.getElementById('sone-overlay').addEventListener('click',function(e){if(e.target===this)lukkSoneDialog();});
-document.addEventListener('keydown',function(e){if(e.key==='Escape'){lukkModal();lukkSoneDialog();}});
+document.getElementById('midtpunkt-hint-overlay').addEventListener('click',function(e){if(e.target===this)e.currentTarget.classList.remove('open');});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){lukkModal();lukkSoneDialog();document.getElementById('midtpunkt-hint-overlay').classList.remove('open');}});
 
 oppdaterHint();
 oppdaterKart();
