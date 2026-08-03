@@ -84,22 +84,33 @@ panelet **DTM**.
 
 Trykker du på den nå, feiler den — det er forventet. To ting gjenstår.
 
-### 4. Aktiver CPython-motoren i PyRevit
+### 4. Velg CPython-motoren i PyRevit
 
-`setup.ps1` og selve knappen er avhengig av PyRevit sin **CPython-motor**
-— dette følger normalt **ikke** automatisk med en vanlig
-PyRevit-installasjon, og må slås på separat:
+`setup.ps1` og selve knappen er avhengig av PyRevit sin **CPython-motor**.
+Den følger normalt med selve PyRevit-installasjonen ("shipped with
+pyRevit", ifølge PyRevit selv) — det er altså ikke noe man laster ned
+separat, bare et valg man må aktivere:
 
 1. Åpne Revit
 2. **pyRevit**-fanen → **Settings**
-3. Se etter en seksjon med **"CPython Engines"** (atskilt fra
-   IronPython-motoren, som er standard)
-4. Velg/legg til en CPython-motor (f.eks. 3.12) — PyRevit laster den
-   ned automatisk om nødvendig
-5. Lukk innstillingene, trykk **Reload**
+3. Under **"Engines"**, se på nedtrekksmenyen **"Active CPython Engine"**
+   (atskilt fra "Active Engine", som er IronPython — standardvalget)
+4. **Viser menyen et alternativ** (f.eks. "CPython (3123): CPython
+   Engine")? Velg det.
+5. Trykk **"Save Settings and Reload"**
 
 Uten dette steget vil `setup.ps1` feile med en melding om at den ikke
-finner `...\pyRevit-Master\bin\cengines`.
+finner noen CPython-motor. Scriptet søker automatisk både i din egen
+brukermappe (`%APPDATA%`) og i `Program Files` (vanlig hvis PyRevit er
+installert sentralt av IT), så det spiller ingen rolle hvilken av de to
+installasjonstypene du har.
+
+**Viser "Active CPython Engine" ingenting å velge (tom meny)?** Da
+mangler PyRevit-installasjonen den bunede CPython-motoren helt, noe som
+ikke skal skje ved en normal installasjon. Løsningen er da å
+avinstallere PyRevit og installere nyeste versjon på nytt fra
+[pyrevitlabs.io](https://pyrevitlabs.io), fremfor å lete etter en egen
+nedlastingsknapp — den finnes ikke.
 
 ### 5. Kjør det automatiske oppsett-scriptet
 
@@ -173,6 +184,12 @@ på reell feilsøking:
   hovedversjonen faktisk stemmer med PyRevit sin CPython-motor
 - **"Name must be unique"** ved gjentatt bruk → skal ikke lenger skje
   (fikset ved å navngi opprettede Level ut fra kote)
+- **`setup.ps1` sier den mangler skrivetilgang** → PyRevit er
+  sannsynligvis installert sentralt av IT til `Program Files`, som er
+  skrivebeskyttet for vanlige brukere. Scriptet foreslår tre løsninger
+  direkte i feilmeldingen (kjøre som administrator for dette ene
+  steget, be IT om tilgang, eller be IT installere PyRevit som
+  brukerinstallasjon i stedet).
 
 Skulle noe likevel feile på selve `Toposolid.Create(...)`-linjen i
 `opprett_toposolid()` i `script.py` — dette er den ene delen av koden
