@@ -35,10 +35,15 @@ og en del av syntaksen under kun fungerer i PowerShell.
    "Kommandoprompt"/"Command Prompt", som er noe annet)
 
 Et mørkt tekstvindu åpner seg. Lim inn (eller skriv) kommandoene under,
-én linje om gangen, og trykk Enter etter hver:
+én linje om gangen, og trykk Enter etter hver. **Lim inn kun én linje
+om gangen** — limer du inn alle fire på én gang, kan et linjeskift
+noen ganger "spises" av terminalen og lime to linjer sammen til én
+(du vil da se en rar feilmelding om et uventet tegn på slutten av
+kommandoen):
 
 ```powershell
-cd ([Environment]::GetFolderPath("MyDocuments"))
+$dokumenter = [Environment]::GetFolderPath("MyDocuments")
+cd $dokumenter
 mkdir GitRepos -ErrorAction SilentlyContinue
 cd GitRepos
 git clone https://github.com/Nordmo/KartverketToposolid.git
@@ -79,7 +84,24 @@ panelet **DTM**.
 
 Trykker du på den nå, feiler den — det er forventet. To ting gjenstår.
 
-### 4. Kjør det automatiske oppsett-scriptet
+### 4. Aktiver CPython-motoren i PyRevit
+
+`setup.ps1` og selve knappen er avhengig av PyRevit sin **CPython-motor**
+— dette følger normalt **ikke** automatisk med en vanlig
+PyRevit-installasjon, og må slås på separat:
+
+1. Åpne Revit
+2. **pyRevit**-fanen → **Settings**
+3. Se etter en seksjon med **"CPython Engines"** (atskilt fra
+   IronPython-motoren, som er standard)
+4. Velg/legg til en CPython-motor (f.eks. 3.12) — PyRevit laster den
+   ned automatisk om nødvendig
+5. Lukk innstillingene, trykk **Reload**
+
+Uten dette steget vil `setup.ps1` feile med en melding om at den ikke
+finner `...\pyRevit-Master\bin\cengines`.
+
+### 5. Kjør det automatiske oppsett-scriptet
 
 `setup.ps1` (ligger i repo-roten) automatiserer det som ellers er mest
 tidkrevende: henter WebView2-komponentene fra NuGet automatisk, finner
@@ -88,9 +110,13 @@ riktig Python-versjon på maskinen din, og installerer `numpy`,
 Krever ingen administrator-rettigheter.
 
 Åpne PowerShell (se fremgangsmåte i del 2 hvis du har lukket det
-vinduet siden sist), naviger til mappen du klonet, og kjør:
+vinduet siden sist), naviger til mappen du klonet — **lim inn disse to
+linjene hver for seg**, ikke samtidig:
 ```powershell
-cd (Join-Path ([Environment]::GetFolderPath("MyDocuments")) "GitRepos\KartverketToposolid")
+$dokumenter = [Environment]::GetFolderPath("MyDocuments")
+```
+```powershell
+cd "$dokumenter\GitRepos\KartverketToposolid"
 ```
 Deretter:
 ```powershell
@@ -120,7 +146,7 @@ Windows 10/11-maskiner har den fra før via Edge — scriptet sjekker
 dette for deg og varsler hvis den mangler):
 `https://go.microsoft.com/fwlink/p/?LinkId=2124703`
 
-### 5. Test
+### 6. Test
 
 1. **Restart Revit helt** (ikke bare Reload — luk hele programmet,
    sjekk i Oppgavebehandling at `Revit.exe` er borte)
