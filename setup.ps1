@@ -82,25 +82,42 @@ Write-Host "Fant pyRevit-installasjon: $cloneRoot"
 Write-Host "PyRevit bruker Python $maalVersjon (motor: $($cengineDir.Name))"
 
 $sitePackages = Join-Path $cloneRoot "site-packages"
+$brukerPythonpathSatt = $false
 
+$kanSkriveDirekte = $true
 try {
     New-Item -ItemType Directory -Force -Path $sitePackages -ErrorAction Stop | Out-Null
     $testFil = Join-Path $sitePackages ".skrivetest-$(Get-Random)"
     New-Item -ItemType File -Path $testFil -ErrorAction Stop | Out-Null
     Remove-Item $testFil -Force -ErrorAction SilentlyContinue
 } catch {
-    Write-Error (
-        "Har ikke skrive-tilgang til $sitePackages`n" +
-        "Dette skjer ofte naar pyRevit er installert sentralt av IT til " +
-        "'Program Files', som normalt er skrivebeskyttet for vanlige " +
-        "brukere. Proev en av disse:`n" +
-        "  1. Hoyreklikk PowerShell -> 'Kjor som administrator', kjor " +
-        "setup.ps1 paa nytt derfra (kun for dette ene steget)`n" +
-        "  2. Be IT-avdelingen gi deg skrive-tilgang til denne mappen`n" +
-        "  3. Be IT installere pyRevit paa nytt som brukerinstallasjon " +
-        "(uten admin-rettigheter), som installerer til %APPDATA% i stedet"
-    )
-    exit 1
+    $kanSkriveDirekte = $false
+}
+
+if (-not $kanSkriveDirekte) {
+    # Vanligst naar pyRevit er installert sentralt av IT til Program Files,
+    # som er skrivebeskyttet for vanlige brukere. I stedet for aa kreve
+    # admin-rettigheter eller IT-involvering, bruker vi PYTHONPATH -
+    # en miljovariabel pyRevit sin CPython-motor allerede leser for AA
+    # FINNE EKSTRA pakke-mapper (dokumentert av pyRevit selv), og som kan
+    # settes per bruker uten noen spesielle rettigheter.
+    Write-Host "Ingen skrive-tilgang til $sitePackages (vanlig ved sentral IT-installasjon)." -ForegroundColor Yellow
+    Write-Host "Bruker i stedet en mappe i din egen brukerprofil, via PYTHONPATH." -ForegroundColor Yellow
+
+    $sitePackages = Join-Path $env:APPDATA "KartverketToposolid\site-packages"
+    New-Item -ItemType Directory -Force -Path $sitePackages | Out-Null
+
+    $eksisterendePythonpath = [Environment]::GetEnvironmentVariable("PYTHONPATH", "User")
+    if (-not $eksisterendePythonpath) {
+        [Environment]::SetEnvironmentVariable("PYTHONPATH", $sitePackages, "User")
+        Write-Host "PYTHONPATH satt til: $sitePackages" -ForegroundColor Green
+    } elseif ($eksisterendePythonpath -notlike "*$sitePackages*") {
+        [Environment]::SetEnvironmentVariable("PYTHONPATH", "$eksisterendePythonpath;$sitePackages", "User")
+        Write-Host "PYTHONPATH utvidet til aa inkludere: $sitePackages" -ForegroundColor Green
+    } else {
+        Write-Host "PYTHONPATH inneholder allerede riktig mappe." -ForegroundColor Green
+    }
+    $brukerPythonpathSatt = $true
 }
 
 # ============================================================
@@ -285,3 +302,9 @@ if (Test-Path $runtimeKey) {
 Skriv-Steg "Oppsett ferdig"
 Write-Host "Restart Revit HELT (ikke bare Reload), aapne et prosjekt med" -ForegroundColor Cyan
 Write-Host "Project Base Point satt, og trykk 'Lag Toposolid'." -ForegroundColor Cyan
+if ($brukerPythonpathSatt) {
+    Write-Host ""
+    Write-Host "NB: PYTHONPATH ble akkurat endret. Miljovariabler leses kun" -ForegroundColor Yellow
+    Write-Host "naar et program starter, saa en full restart av Revit er" -ForegroundColor Yellow
+    Write-Host "ekstra viktig denne gangen for at pakkene skal bli funnet." -ForegroundColor Yellow
+}

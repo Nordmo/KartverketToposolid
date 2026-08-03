@@ -84,35 +84,7 @@ panelet **DTM**.
 
 Trykker du på den nå, feiler den — det er forventet. To ting gjenstår.
 
-### 4. Velg CPython-motoren i PyRevit
-
-`setup.ps1` og selve knappen er avhengig av PyRevit sin **CPython-motor**.
-Den følger normalt med selve PyRevit-installasjonen ("shipped with
-pyRevit", ifølge PyRevit selv) — det er altså ikke noe man laster ned
-separat, bare et valg man må aktivere:
-
-1. Åpne Revit
-2. **pyRevit**-fanen → **Settings**
-3. Under **"Engines"**, se på nedtrekksmenyen **"Active CPython Engine"**
-   (atskilt fra "Active Engine", som er IronPython — standardvalget)
-4. **Viser menyen et alternativ** (f.eks. "CPython (3123): CPython
-   Engine")? Velg det.
-5. Trykk **"Save Settings and Reload"**
-
-Uten dette steget vil `setup.ps1` feile med en melding om at den ikke
-finner noen CPython-motor. Scriptet søker automatisk både i din egen
-brukermappe (`%APPDATA%`) og i `Program Files` (vanlig hvis PyRevit er
-installert sentralt av IT), så det spiller ingen rolle hvilken av de to
-installasjonstypene du har.
-
-**Viser "Active CPython Engine" ingenting å velge (tom meny)?** Da
-mangler PyRevit-installasjonen den bunede CPython-motoren helt, noe som
-ikke skal skje ved en normal installasjon. Løsningen er da å
-avinstallere PyRevit og installere nyeste versjon på nytt fra
-[pyrevitlabs.io](https://pyrevitlabs.io), fremfor å lete etter en egen
-nedlastingsknapp — den finnes ikke.
-
-### 5. Kjør det automatiske oppsett-scriptet
+### 4. Kjør det automatiske oppsett-scriptet
 
 `setup.ps1` (ligger i repo-roten) automatiserer det som ellers er mest
 tidkrevende: henter WebView2-komponentene fra NuGet automatisk, finner
@@ -157,7 +129,7 @@ Windows 10/11-maskiner har den fra før via Edge — scriptet sjekker
 dette for deg og varsler hvis den mangler):
 `https://go.microsoft.com/fwlink/p/?LinkId=2124703`
 
-### 6. Test
+### 5. Test
 
 1. **Restart Revit helt** (ikke bare Reload — luk hele programmet,
    sjekk i Oppgavebehandling at `Revit.exe` er borte)
@@ -178,18 +150,29 @@ forteller dialogboksen nøyaktig hvilket steg som feilet, og pyRevit sin
 
 De vanligste feilene og løsningene er allerede håndtert i koden basert
 på reell feilsøking:
+- **"Fant ingen pyRevit-installasjon med en CPython-motor"** → åpne
+  **pyRevit**-fanen → **Settings**, og sjekk at nedtrekksmenyen
+  **"Active CPython Engine"** faktisk har et valg (f.eks. "CPython
+  (3123)") — velg det og trykk **"Save Settings and Reload"** hvis det
+  ikke allerede er valgt. Motoren følger normalt automatisk med
+  PyRevit ("shipped with pyRevit"), så dette er sjelden noe man må
+  gjøre, men er det første å sjekke hvis scriptet melder denne feilen.
+  Viser menyen ingenting å velge i det hele tatt, mangler
+  PyRevit-installasjonen motoren helt — løsningen er da å installere
+  PyRevit på nytt fra [pyrevitlabs.io](https://pyrevitlabs.io).
 - **WebView2-relaterte feil ved andre forsøk i samme økt** → restart
   Revit helt, ikke bare Reload
-- **"No module named X"** → feil Python-miljø i steg 5, dobbeltsjekk at
+- **"No module named X"** → feil Python-miljø i steg 4, dobbeltsjekk at
   hovedversjonen faktisk stemmer med PyRevit sin CPython-motor
 - **"Name must be unique"** ved gjentatt bruk → skal ikke lenger skje
   (fikset ved å navngi opprettede Level ut fra kote)
-- **`setup.ps1` sier den mangler skrivetilgang** → PyRevit er
-  sannsynligvis installert sentralt av IT til `Program Files`, som er
-  skrivebeskyttet for vanlige brukere. Scriptet foreslår tre løsninger
-  direkte i feilmeldingen (kjøre som administrator for dette ene
-  steget, be IT om tilgang, eller be IT installere PyRevit som
-  brukerinstallasjon i stedet).
+- **PyRevit er installert sentralt av IT til `Program Files`** (vanlig
+  i bedriftsoppsett) → scriptet oppdager automatisk hvis den mangler
+  skrivetilgang dit, og legger da pakkene i en egen mappe i din
+  brukerprofil i stedet, via miljøvariabelen `PYTHONPATH` (en mekanisme
+  PyRevit selv støtter for nettopp dette). Krever ingen admin-rettigheter
+  eller IT-involvering — men **du må restarte Revit helt** etterpå for
+  at endringen skal tre i kraft (miljøvariabler leses kun ved oppstart).
 
 Skulle noe likevel feile på selve `Toposolid.Create(...)`-linjen i
 `opprett_toposolid()` i `script.py` — dette er den ene delen av koden
