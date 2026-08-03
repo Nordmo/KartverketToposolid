@@ -32,7 +32,6 @@ import os
 import re
 import json
 import math
-import sys
 import traceback
 
 # VIKTIG: pyrevit.forms er IKKE stottet under pyRevit sin CPython-motor
@@ -210,19 +209,6 @@ def _http_get(url, params=None, timeout=15):
     except urllib.error.HTTPError as e:
         return _EnkelHttpRespons(e.read(), e.code)
 
-
-try:
-    import tempfile as _tf
-    _diag_path = os.path.join(_tf.gettempdir(), "kartverket_toposolid_pythonsti.txt")
-    with open(_diag_path, "w") as _f:
-        _f.write("sys.executable = {}\n".format(sys.executable))
-        _f.write("sys.version = {}\n".format(sys.version))
-        _f.write("sys.path:\n")
-        for _p in sys.path:
-            _f.write("  {}\n".format(_p))
-    print("Python-diagnostikk skrevet til: {}".format(_diag_path))
-except Exception as _diag_ex:
-    print("Klarte ikke skrive diagnostikk-fil: {}".format(_diag_ex))
 
 try:
     import numpy as np
@@ -482,16 +468,6 @@ def hent_base_point(doc):
     n_m = UnitUtils.ConvertFromInternalUnits(n_ft, _METER)
 
     pos = bp.Position  # XYZ, internal units (fot) - kun til geometri-offset
-
-    try:
-        print(
-            "Base Point diagnostikk: E/W-param={:.3f} m, N/S-param={:.3f} m, "
-            "Position=({:.3f}, {:.3f}, {:.3f}) fot".format(
-                e_m, n_m, pos.X, pos.Y, pos.Z
-            )
-        )
-    except Exception:
-        pass
 
     return e_m, n_m, pos
 

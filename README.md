@@ -141,9 +141,9 @@ du feilsøker videre — se **Feilsøking** under.
 
 ![Knappen i Revit-båndet](docs/images/knapp.png)
 
-![Dialogvinduet med kart](docs/images/dialog.png)
+![Dialogvinduet med kart](docs/images/dialog.jpg)
 
-![Ferdig Toposolid i modellen](docs/images/resultat.png)
+![Ferdig Toposolid i modellen](docs/images/resultat.jpg)
 
 <!--
   TODO: legg til en GIF av hele flyten (PowerShell → installasjon →
