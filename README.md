@@ -44,69 +44,38 @@ panelet **DTM**.
 
 Trykker du på den nå, feiler den — det er forventet. To ting gjenstår.
 
-### 4. Hent WebView2-komponentene
+### 4. Kjør det automatiske oppsett-scriptet
 
-Disse er .NET-filer (ikke pip-pakker) og må hentes separat via NuGet:
+`setup.ps1` (ligger i repo-roten) automatiserer det som ellers er mest
+tidkrevende: henter WebView2-komponentene fra NuGet automatisk, finner
+riktig Python-versjon på maskinen din, og installerer `numpy`,
+`rasterio` og `pyproj` rett inn i PyRevit sin `site-packages`-mappe.
+Krever ingen administrator-rettigheter.
 
-1. Gå til [nuget.org/packages/Microsoft.Web.WebView2](https://www.nuget.org/packages/Microsoft.Web.WebView2)
-2. Trykk **Download package** — du får en `.nupkg`-fil
-3. Endre filendelsen fra `.nupkg` til `.zip`, pakk ut
-4. Finn disse tre filene (typisk under `lib\net462\` og
-   `runtimes\win-x64\native\` — bruk **net462**, ikke `netcoreapp`/`net6.0`,
-   siden Revit er en .NET Framework-vert):
-   - `Microsoft.Web.WebView2.Core.dll`
-   - `Microsoft.Web.WebView2.Wpf.dll`
-   - `WebView2Loader.dll`
-5. Kopier alle tre inn i:
-   ```
-   KartverketToposolid.extension\KartverketToposolid.tab\DTM.panel\LagToposolid.pushbutton\
-   ```
-
-Sjekk også at **WebView2 Runtime** er installert (de fleste Windows
-10/11-maskiner har den fra før via Edge) — test ved å åpne
-`https://go.microsoft.com/fwlink/p/?LinkId=2124703` i nettleseren.
-
-### 5. Installer Python-pakker i RIKTIG Python-miljø
-
-Dette er det steget som lettest går galt, så følg det nøye.
-
-**Finn ut hvilken Python-versjon PyRevit sin CPython-motor bruker.**
-Åpne
-```
-%APPDATA%\pyRevit-Master\bin\cengines\
-```
-og se hvilken mappe som ligger der — navnet forteller versjonen, f.eks.
-`CPY3123` betyr Python **3.12.3**. Skriv ned hovedversjonen (3.12, 3.11,
-osv.) — dette er avgjørende, siden `numpy` og `rasterio` inneholder
-kompilert kode som er versjonsspesifikk.
-
-**Sjekk om du allerede har en Python-installasjon med samme
-hovedversjon:**
+Åpne PowerShell i repo-mappen og kjør:
 ```powershell
-python --version
+.\setup.ps1
 ```
 
-- **Stemmer hovedversjonen** (f.eks. begge er 3.12.x) → bruk den direkte
-  i kommandoen under.
-- **Stemmer ikke** (eller ingen Python installert) → last ned riktig
-  versjon fra
-  [python.org/downloads/release](https://www.python.org/downloads/release/)
-  (søk opp riktig hovedversjon, f.eks. "Python 3.12"). **NB:** eldre
-  3.12.x-delversjoner (nyere enn 3.12.10) har ofte kun kildekode uten
-  Windows-installer — sjekk at det faktisk finnes en
-  "Windows installer (64-bit)" på nedlastingssiden, ellers gå én
-  delversjon ned. Under installasjon: **ikke** huk av "Add to PATH".
-
-**Installer pakkene rett inn i PyRevit sin `site-packages`-mappe** (ikke
-i din vanlige Python sin egen):
+**Får du feilmeldingen "running scripts is disabled on this system"** —
+Windows blokkerer som standard kjøring av `.ps1`-filer. Kjør i stedet:
 ```powershell
-python -m pip install --target "%APPDATA%\pyRevit-Master\site-packages" numpy rasterio pyproj
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
-(bytt ut `python` med full sti til riktig `python.exe` hvis du måtte
-installere en egen versjon ved siden av, f.eks.
-`"C:\Users\<bruker>\AppData\Local\Programs\Python\Python312\python.exe"`)
+(dette endrer ingen permanente innstillinger — kun for denne ene
+kjøringen)
 
-### 6. Test
+Har du **ikke** en Python-installasjon som matcher versjonen PyRevit
+bruker (scriptet forteller deg nøyaktig hvilken), stopper scriptet opp
+og ber deg installere den ene manglende tingen — resten kjører
+automatisk når du limer inn stien.
+
+**Sjekk i tillegg at WebView2 Runtime er installert** (de fleste
+Windows 10/11-maskiner har den fra før via Edge — scriptet sjekker
+dette for deg og varsler hvis den mangler):
+`https://go.microsoft.com/fwlink/p/?LinkId=2124703`
+
+### 5. Test
 
 1. **Restart Revit helt** (ikke bare Reload — luk hele programmet,
    sjekk i Oppgavebehandling at `Revit.exe` er borte)
@@ -146,6 +115,7 @@ Revit-oppdatering.
 ## Mappestruktur
 
 ```
+setup.ps1                              ← kjør dette foerst (steg 4)
 KartverketToposolid.extension/
 └── KartverketToposolid.tab/
     └── DTM.panel/

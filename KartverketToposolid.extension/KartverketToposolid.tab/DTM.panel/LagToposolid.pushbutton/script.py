@@ -496,6 +496,18 @@ def hent_base_point(doc):
     return e_m, n_m, pos
 
 
+def _unikt_levelnavn(doc, basisnavn):
+    """Garanterer et unikt Level-navn - Revit tillater ikke to nivaaer
+    med identisk navn. Legger paa (2), (3) osv. ved kollisjon."""
+    eksisterende = set(lvl.Name for lvl in FilteredElementCollector(doc).OfClass(Level))
+    if basisnavn not in eksisterende:
+        return basisnavn
+    i = 2
+    while "{} ({})".format(basisnavn, i) in eksisterende:
+        i += 1
+    return "{} ({})".format(basisnavn, i)
+
+
 def opprett_toposolid(doc, punkter, base_pos):
     """Oppretter Toposolid fra punktliste (x, y, z i meter, RELATIVT
     til Project Base Point). Punktene forskyves med Base Point sin
@@ -552,7 +564,9 @@ def opprett_toposolid(doc, punkter, base_pos):
                 break
         if level is None:
             level = Level.Create(doc, onsket_niva_ft)
-            level.Name = "Terreng - Kartverket import"
+            onsket_niva_m = UnitUtils.ConvertFromInternalUnits(onsket_niva_ft, _METER)
+            basisnavn = "Terreng - Kartverket import (kote {:.2f})".format(onsket_niva_m)
+            level.Name = _unikt_levelnavn(doc, basisnavn)
 
         Toposolid.Create(doc, xyz_punkter, toposolid_type_id, level.Id)
         t.Commit()
