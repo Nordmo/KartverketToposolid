@@ -12,6 +12,24 @@ Krever **Revit 2024 eller nyere** (Toposolid finnes ikke i eldre versjoner).
 
 ---
 
+## Hurtigstart
+
+1. Installer PyRevit (Software Center hos Multiconsult, ellers
+   [pyrevitlabs.io](https://pyrevitlabs.io))
+2. Åpne PowerShell og lim inn:
+   ```powershell
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force; irm https://raw.githubusercontent.com/Nordmo/KartverketToposolid/main/bootstrap.ps1 | iex
+   ```
+3. I Revit: **pyRevit**-fanen → **Settings** → **Custom Extension
+   Directories** → legg til mappen som ble opprettet → **Reload**
+4. Trykk **Lag Toposolid** under fanen **KartverketToposolid**
+
+Ferdig — regn med ca. 10 minutter første gang. Full forklaring,
+feilsøking og alternativer (bl.a. for videre utvikling med Git) finner
+du under.
+
+---
+
 ## Engangsoppsett
 
 Dette gjøres én gang per PC, ikke hver gang du bruker knappen. Regn med
@@ -116,6 +134,30 @@ panelet **DTM**.
 
 Skulle noe feile på tross av Reload, prøv en full restart av Revit før
 du feilsøker videre — se **Feilsøking** under.
+
+---
+
+## Slik ser det ut
+
+<!--
+  TODO: legg til ekte skjermbilder fra en faktisk kjøring, lagre i
+  en mappe kalt docs/images/ i repo-roten, og fjern kommentar-tagene
+  under for hvert bilde du har lagt til.
+
+  ![Knappen i Revit-båndet](docs/images/knapp.png)
+  ![Dialogvinduet med kart](docs/images/dialog.png)
+  ![Ferdig Toposolid i modellen](docs/images/resultat.png)
+-->
+
+*(Skjermbilder kommer — se kommentaren i selve README-filen for
+nøyaktig hvilke tre bilder som mangler og hvor de skal ligge)*
+
+En kort GIF av hele flyten (PowerShell → installasjon → Revit → knapp
+→ ferdig terreng) er en fin utvidelse her etter hvert som verktøyet har
+vist seg stabilt på et par flere maskiner.
+[ScreenToGif](https://www.screentogif.com/) (gratis, Windows) er et
+enkelt verktøy for å lage en slik selv — tar opp skjermen direkte til
+GIF-format, ingen etterredigering nødvendig for noe så kort.
 
 ---
 
