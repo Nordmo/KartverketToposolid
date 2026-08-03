@@ -20,15 +20,39 @@ Dette gjøres én gang per PC, ikke hver gang du bruker knappen. Regn med
 ### 1. Installer PyRevit
 
 Last ned fra [pyrevitlabs.io](https://pyrevitlabs.io) hvis du ikke
-allerede har det.
+allerede har det. (Software Center MC)
 
 ### 2. Hent ned dette repoet
+
+Alle kommandoer i denne guiden (også `setup.ps1` senere) kjøres i
+**PowerShell** — ikke i Kommandoprompt/`cmd.exe`, siden `.ps1`-script
+og en del av syntaksen under kun fungerer i PowerShell.
+
+**Slik åpner du PowerShell:**
+1. Trykk på **Windows-tasten** (eller klikk på Start-menyen)
+2. Skriv **"PowerShell"**
+3. Klikk på **Windows PowerShell** i søkeresultatet (blått ikon — ikke
+   "Kommandoprompt"/"Command Prompt", som er noe annet)
+
+Et mørkt tekstvindu åpner seg. Lim inn (eller skriv) kommandoene under,
+én linje om gangen, og trykk Enter etter hver:
 
 ```powershell
 cd Dokumenter
 mkdir GitRepos
 cd GitRepos
 git clone https://github.com/Nordmo/KartverketToposolid.git
+```
+
+**Har du ikke Git installert**, feiler siste linje med en melding om at
+`git` ikke er en kjent kommando. Last ned og installer Git fra
+[git-scm.com/downloads](https://git-scm.com/downloads) (standardvalgene
+i installasjonsveiviseren er fine), lukk og åpne PowerShell på nytt, og
+prøv igjen.
+
+Etter at kommandoene er kjørt, ligger repoet i:
+```
+Dokumenter\GitRepos\KartverketToposolid
 ```
 
 ### 3. Koble mappen til PyRevit
@@ -52,7 +76,12 @@ riktig Python-versjon på maskinen din, og installerer `numpy`,
 `rasterio` og `pyproj` rett inn i PyRevit sin `site-packages`-mappe.
 Krever ingen administrator-rettigheter.
 
-Åpne PowerShell i repo-mappen og kjør:
+Åpne PowerShell (se fremgangsmåte i del 2 hvis du har lukket det
+vinduet siden sist), naviger til mappen du klonet, og kjør:
+```powershell
+cd Dokumenter\GitRepos\KartverketToposolid
+```
+Deretter:
 ```powershell
 .\setup.ps1
 ```
