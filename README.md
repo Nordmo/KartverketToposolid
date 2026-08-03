@@ -139,18 +139,19 @@ du feilsøker videre — se **Feilsøking** under.
 
 ## Slik ser det ut
 
+![Knappen i Revit-båndet](docs/images/knapp.png)
+
+![Dialogvinduet med kart](docs/images/dialog.png)
+
+![Ferdig Toposolid i modellen](docs/images/resultat.png)
+
 <!--
-  TODO: legg til ekte skjermbilder fra en faktisk kjøring, lagre i
-  en mappe kalt docs/images/ i repo-roten, og fjern kommentar-tagene
-  under for hvert bilde du har lagt til.
+  TODO: legg til en GIF av hele flyten (PowerShell → installasjon →
+  Revit → knapp → ferdig terreng) her når den er laget, lagre som
+  docs/images/flyt.gif, og fjern kommentar-tagene rundt linjen under.
 
-  ![Knappen i Revit-båndet](docs/images/knapp.png)
-  ![Dialogvinduet med kart](docs/images/dialog.png)
-  ![Ferdig Toposolid i modellen](docs/images/resultat.png)
+  ![Hele flyten](docs/images/flyt.gif)
 -->
-
-*(Skjermbilder kommer — se kommentaren i selve README-filen for
-nøyaktig hvilke tre bilder som mangler og hvor de skal ligge)*
 
 En kort GIF av hele flyten (PowerShell → installasjon → Revit → knapp
 → ferdig terreng) er en fin utvidelse her etter hvert som verktøyet har
