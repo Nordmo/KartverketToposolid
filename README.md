@@ -102,14 +102,20 @@ panelet **DTM**.
 
 ### 4. Ferdig — lag din første Toposolid
 
-1. **Restart Revit helt** (ikke bare Reload — luk hele programmet,
-   sjekk i Oppgavebehandling at `Revit.exe` er borte)
+1. **Trykk Reload** på **pyRevit**-fanen (rask — ikke nødvendig å lukke
+   Revit). Fikk du varselen om `PYTHONPATH` i steg 2 (skjer kun hvis
+   PyRevit ligger i skrivebeskyttet `Program Files`), må du derimot
+   **restarte Revit helt** denne ene gangen — miljøvariabler leses kun
+   når et program starter, så Reload er ikke nok da.
 2. Åpne et prosjekt med **Project Base Point** satt (tallene under
    Manage → Coordinates skal vise ekte E/N-verdier, ikke 0)
 3. Trykk **Lag Toposolid**
 4. Vinduet åpnes med nullpunktet forhåndsutfylt — velg koordinatsystem,
    sett midtpunkt (klikk i kartet eller skriv inn), radius og
    punkttetthet, trykk **"Lag Toposolid"**
+
+Skulle noe feile på tross av Reload, prøv en full restart av Revit før
+du feilsøker videre — se **Feilsøking** under.
 
 ---
 
@@ -140,8 +146,9 @@ på reell feilsøking:
   Viser menyen ingenting å velge i det hele tatt, mangler
   PyRevit-installasjonen motoren helt — løsningen er da å installere
   PyRevit på nytt fra [pyrevitlabs.io](https://pyrevitlabs.io).
-- **WebView2-relaterte feil ved andre forsøk i samme økt** → restart
-  Revit helt, ikke bare Reload
+- **WebView2-relaterte feil ved andre forsøk i samme økt** → prøv
+  **Reload** på pyRevit-fanen først (raskt); hjelper ikke det, restart
+  Revit helt
 - **"No module named X"** → feil Python-miljø, dobbeltsjekk at
   hovedversjonen faktisk stemmer med PyRevit sin CPython-motor. Scriptet
   tilbyr å laste ned og installere riktig versjon **automatisk** —
