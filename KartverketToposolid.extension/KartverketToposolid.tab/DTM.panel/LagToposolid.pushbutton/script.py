@@ -10,7 +10,7 @@ og punkttetthet, og trykke "Lag Toposolid".
 
 ENGANGSOPPSETT (se README.md i denne mappen for full oppskrift):
   1. Installer pakker i pyRevit sin CPython-motor:
-       pip install rasterio numpy pyproj requests
+       pip install rasterio numpy pyproj
   2. Last ned WebView2 (NuGet-pakken "Microsoft.Web.WebView2") og legg
      følgende filer i SAMME mappe som dette scriptet:
        - Microsoft.Web.WebView2.Core.dll
@@ -32,56 +32,211 @@ import os
 import re
 import json
 import math
+import sys
+import traceback
 
+# VIKTIG: pyrevit.forms er IKKE stottet under pyRevit sin CPython-motor
+# (feiler med PyRevitCPythonNotSupported allerede ved import). Vi bruker
+# derfor ren WPF (System.Windows.MessageBox) for aa vise feilmeldinger,
+# og __revit__-globalen (som pyRevit alltid injiserer, uansett motor)
+# for aa hente dokumentet - ingen avhengighet til pyrevitlib i det hele
+# tatt.
 import clr
-
-# ------------------------------------------------------------------
-#  .NET-referanser
-# ------------------------------------------------------------------
-clr.AddReference("RevitAPI")
-clr.AddReference("RevitAPIUI")
 clr.AddReference("PresentationFramework")
-clr.AddReference("PresentationCore")
-clr.AddReference("WindowsBase")
+from System.Windows import MessageBox, MessageBoxButton, MessageBoxImage
 
-_ADDIN_DIR = os.path.dirname(__file__)
-clr.AddReference(os.path.join(_ADDIN_DIR, "Microsoft.Web.WebView2.Core.dll"))
-clr.AddReference(os.path.join(_ADDIN_DIR, "Microsoft.Web.WebView2.Wpf.dll"))
 
-from System.Collections.Generic import List
-from System.Windows import Window, WindowStartupLocation, SizeToContent
-from Microsoft.Web.WebView2.Wpf import WebView2
+def _vis_feilmelding(tittel, tekst):
+    print("[{}] {}".format(tittel, tekst))  # havner i pyRevit sin Output-konsoll
+    try:
+        MessageBox.Show(tekst, tittel, MessageBoxButton.OK, MessageBoxImage.Error)
+    except Exception:
+        pass  # hvis selv MessageBox feiler, er print() over uansett siste utvei
 
-from Autodesk.Revit.DB import (
-    FilteredElementCollector, BuiltInCategory, BuiltInParameter,
-    UnitUtils, XYZ, Transaction, ElementId, Level,
-)
+
+def _feil_og_avslutt(steg, ex):
+    """Viser en presis feilmelding med stedsnavn + full traceback, i
+    stedet for aa la Revit vise sin egen generiske 'Object reference
+    not set...'-dialog uten noen som helst kontekst."""
+    detalj = traceback.format_exc()
+    _vis_feilmelding(
+        "Oppstartsfeil",
+        "Kartverket -> Revit Toposolid: feilet under oppstart.\n\n"
+        "STEG: {}\n\n"
+        "FEIL: {}\n\n"
+        "Se ogsaa pyRevit sin Output-konsoll for full traceback.".format(steg, ex),
+    )
+    raise
+
+
+# ------------------------------------------------------------------
+#  .NET-referanser (hvert steg feiler synlig med praesis stedsangivelse
+#  i stedet for en anonym NullReferenceException fra Revit)
+# ------------------------------------------------------------------
+try:
+    import clr
+except Exception as ex:
+    _feil_og_avslutt("import clr (pythonnet mangler i CPython-miljoeet)", ex)
+
+try:
+    clr.AddReference("RevitAPI")
+    clr.AddReference("RevitAPIUI")
+    clr.AddReference("PresentationFramework")
+    clr.AddReference("PresentationCore")
+    clr.AddReference("WindowsBase")
+except Exception as ex:
+    _feil_og_avslutt("clr.AddReference paa kjerne-.NET/Revit-sammenstillinger", ex)
+
+# AdWindows gir tilgang til Revit sitt hovedvindu-handtak, slik at vi
+# kan gjore vaart eget vindu til et ekte Windows-nivaa modalt vindu
+# (se vis_vindu). Uten dette kan Revit "fryse" paa en usikker maate
+# hvis brukeren proever aa samhandle med modellen mens vinduet vaart
+# staar aapent.
+try:
+    clr.AddReference("AdWindows")
+    from Autodesk.Windows import ComponentManager
+    _HAR_COMPONENT_MANAGER = True
+except Exception:
+    _HAR_COMPONENT_MANAGER = False
+
+import System
+
+
+def _garantert_referanse(dll_path, enkelt_navn):
+    """Legger til en .NET-sammenstilling - men gjenbruker en allerede
+    lastet versjon (f.eks. lastet av pyRevit selv, eller av et tidligere
+    knappetrykk i samme Revit-oekt) i stedet for aa proeve aa laste inn
+    vaar egen kopi paa nytt, som feiler med 'Assembly with same name is
+    already loaded'."""
+    for asm in System.AppDomain.CurrentDomain.GetAssemblies():
+        try:
+            if asm.GetName().Name == enkelt_navn:
+                return asm
+        except Exception:
+            continue
+    return clr.AddReference(dll_path)
+
+
+try:
+    _ADDIN_DIR = os.path.dirname(__file__)
+    _dll_core = os.path.join(_ADDIN_DIR, "Microsoft.Web.WebView2.Core.dll")
+    _dll_wpf = os.path.join(_ADDIN_DIR, "Microsoft.Web.WebView2.Wpf.dll")
+    _dll_loader = os.path.join(_ADDIN_DIR, "WebView2Loader.dll")
+    for _p in (_dll_core, _dll_wpf, _dll_loader):
+        if not os.path.isfile(_p):
+            raise Exception("Filen mangler: {}".format(_p))
+    _garantert_referanse(_dll_core, "Microsoft.Web.WebView2.Core")
+    _garantert_referanse(_dll_wpf, "Microsoft.Web.WebView2.Wpf")
+except Exception as ex:
+    _feil_og_avslutt(
+        "Laste inn WebView2-DLL-ene (sjekk at alle tre filer ligger i "
+        "pushbutton-mappen, og at de er hentet fra riktig mappe i "
+        "NuGet-pakken - se README.md)",
+        ex,
+    )
+
+try:
+    from System.Collections.Generic import List
+    from System.Windows import Window, WindowStartupLocation, SizeToContent
+    from Microsoft.Web.WebView2.Wpf import WebView2
+except Exception as ex:
+    _feil_og_avslutt("Importere WPF/WebView2-typer etter AddReference", ex)
+
+try:
+    from Autodesk.Revit.DB import (
+        FilteredElementCollector, BuiltInCategory, BuiltInParameter,
+        UnitUtils, XYZ, Transaction, ElementId, Level,
+    )
+except Exception as ex:
+    _feil_og_avslutt("Importere grunnleggende Autodesk.Revit.DB-typer", ex)
+
 try:
     from Autodesk.Revit.DB import UnitTypeId
     _METER = UnitTypeId.Meters
 except Exception:
-    # Eldre API-fallback (Revit < 2021) - skal ikke være aktuelt paa 2026,
-    # men holder scriptet fra aa krasje umiddelbart hvis noe er annerledes.
-    from Autodesk.Revit.DB import DisplayUnitType
-    _METER = DisplayUnitType.DUT_METERS
+    try:
+        from Autodesk.Revit.DB import DisplayUnitType
+        _METER = DisplayUnitType.DUT_METERS
+    except Exception as ex:
+        _feil_og_avslutt("Finne enhetstype for meter (UnitTypeId/DisplayUnitType)", ex)
 
 try:
     from Autodesk.Revit.DB import Toposolid, ToposolidType
     _TOPOSOLID_OK = True
 except Exception:
-    _TOPOSOLID_OK = False
-
-from pyrevit import revit, forms
+    _TOPOSOLID_OK = False  # haandteres med tydelig norsk feilmelding senere, ikke her
 
 # ------------------------------------------------------------------
-#  Nettverk / geodata-avhengigheter (krever engangsoppsett, se topp)
+#  Nettverk / geodata-avhengigheter (krever engangsoppsett, se README)
 # ------------------------------------------------------------------
-import requests
-import numpy as np
-import rasterio
-from rasterio.io import MemoryFile
-from pyproj import Transformer
-import pyproj
+# NB: requests/urllib3 er bevisst UNNGAATT her. pyRevit sitt CPython-
+# miljoe ser ut til aa ha en egen (eldre/annen) kopi av urllib3
+# bundlet fra foer, som kolliderer med en fersk pip-installert versjon
+# (samme problemklasse som WebView2-DLL-konflikten lenger opp). Vi
+# bruker derfor Python sitt innebygde urllib i stedet, som aldri kan
+# kollidere siden det ikke er en separat installert pakke.
+import urllib.request
+import urllib.parse
+import urllib.error
+
+
+class _EnkelHttpRespons(object):
+    """Minimal stand-in for requests sitt Response-objekt - kun det vi
+    faktisk bruker (content/text/json()/raise_for_status())."""
+
+    def __init__(self, content, status_code):
+        self.content = content
+        self.status_code = status_code
+
+    @property
+    def text(self):
+        return self.content.decode("utf-8", errors="replace")
+
+    def json(self):
+        return json.loads(self.text)
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise Exception("HTTP-feil {}".format(self.status_code))
+
+
+def _http_get(url, params=None, timeout=15):
+    full_url = url
+    if params:
+        full_url = "{}?{}".format(url, urllib.parse.urlencode(params))
+    try:
+        with urllib.request.urlopen(full_url, timeout=timeout) as resp:
+            return _EnkelHttpRespons(resp.read(), resp.getcode())
+    except urllib.error.HTTPError as e:
+        return _EnkelHttpRespons(e.read(), e.code)
+
+
+try:
+    import tempfile as _tf
+    _diag_path = os.path.join(_tf.gettempdir(), "kartverket_toposolid_pythonsti.txt")
+    with open(_diag_path, "w") as _f:
+        _f.write("sys.executable = {}\n".format(sys.executable))
+        _f.write("sys.version = {}\n".format(sys.version))
+        _f.write("sys.path:\n")
+        for _p in sys.path:
+            _f.write("  {}\n".format(_p))
+    print("Python-diagnostikk skrevet til: {}".format(_diag_path))
+except Exception as _diag_ex:
+    print("Klarte ikke skrive diagnostikk-fil: {}".format(_diag_ex))
+
+try:
+    import numpy as np
+    import rasterio
+    from rasterio.io import MemoryFile
+    from pyproj import Transformer
+    import pyproj
+except Exception as ex:
+    _feil_og_avslutt(
+        "Importere numpy/rasterio/pyproj - disse maa vaere "
+        "pip-installert i SAMME python.exe som pyRevit sin CPython-motor "
+        "bruker (se README.md steg 6)",
+        ex,
+    )
 
 
 # ====================================================================
@@ -122,7 +277,7 @@ def _hpcs_til_wgs84(mx, my):
 def _nn54_offset_api(lon, lat, ref_h=60.0):
     url = "https://ws.geonorge.no/transformering/v1/transformer"
     params = {"x": lon, "y": lat, "z": ref_h, "fra": 5942, "til": 6144}
-    r = requests.get(url, params=params, timeout=15)
+    r = _http_get(url, params=params, timeout=15)
     r.raise_for_status()
     data = r.json()
     z54 = data.get("z", data.get("Z"))
@@ -198,7 +353,7 @@ def hent_coverage_navn():
     global _coverage_cache
     if _coverage_cache:
         return _coverage_cache
-    r = requests.get(
+    r = _http_get(
         WCS_URL,
         params={"SERVICE": "WCS", "VERSION": "1.0.0", "REQUEST": "GetCapabilities"},
         timeout=15,
@@ -247,7 +402,7 @@ def generer_punkter(epsg_inn, midtpunkt_e, midtpunkt_n, radius, tetthet,
         "BBOX": "{},{},{},{}".format(minx, miny, maxx, maxy),
         "WIDTH": px, "HEIGHT": px, "FORMAT": "GeoTIFF",
     }
-    r = requests.get(WCS_URL, params=params, timeout=30)
+    r = _http_get(WCS_URL, params=params, timeout=30)
     if r.content[:1] == b"<":
         raise Exception("WCS-feil: {}".format(r.content[:300]))
 
@@ -297,13 +452,19 @@ def generer_punkter(epsg_inn, midtpunkt_e, midtpunkt_n, radius, tetthet,
 # ====================================================================
 
 def hent_base_point(doc):
-    """Leser Project Base Point sin posisjon i meter (E, N) samt selve
-    XYZ-objektet (internal units = fot) til bruk som offset ved
-    geometrioppretting.
+    """Leser Project Base Point.
 
-    NB: bruker OST_ProjectBasePoint (ikke Survey Point). Position gir
-    punktets plassering relativt til Revit sitt interne origo — de
-    samme tallene som vises i Manage > Coordinates for Base Point."""
+    To ulike ting leses, siden de kan avvike fra hverandre:
+      - E/W, N/S-PARAMETRENE: de tallene brukeren faktisk har skrevet
+        inn i Manage > Coordinates (brukes til aa forhaandsutfylle
+        nullpunkt i appen).
+      - Position: punktets FAKTISKE geometriske plassering i Revit sitt
+        interne koordinatsystem (brukes som offset naar ny geometri
+        opprettes). Denne kan vaere (0,0,0) selv om E/W,N/S-parametrene
+        viser store tall, hvis punktets ikon aldri er fysisk flyttet
+        i modellen - de to henger ikke alltid sammen.
+
+    NB: bruker OST_ProjectBasePoint (ikke Survey Point)."""
     collector = (
         FilteredElementCollector(doc)
         .OfCategory(BuiltInCategory.OST_ProjectBasePoint)
@@ -313,9 +474,25 @@ def hent_base_point(doc):
     if bp is None:
         raise Exception("Fant ikke Project Base Point i den åpne modellen.")
 
-    pos = bp.Position  # XYZ, internal units (fot)
-    e_m = UnitUtils.ConvertFromInternalUnits(pos.X, _METER)
-    n_m = UnitUtils.ConvertFromInternalUnits(pos.Y, _METER)
+    e_param = bp.get_Parameter(BuiltInParameter.BASEPOINT_EASTWEST_PARAM)
+    n_param = bp.get_Parameter(BuiltInParameter.BASEPOINT_NORTHSOUTH_PARAM)
+    e_ft = e_param.AsDouble() if e_param else 0.0
+    n_ft = n_param.AsDouble() if n_param else 0.0
+    e_m = UnitUtils.ConvertFromInternalUnits(e_ft, _METER)
+    n_m = UnitUtils.ConvertFromInternalUnits(n_ft, _METER)
+
+    pos = bp.Position  # XYZ, internal units (fot) - kun til geometri-offset
+
+    try:
+        print(
+            "Base Point diagnostikk: E/W-param={:.3f} m, N/S-param={:.3f} m, "
+            "Position=({:.3f}, {:.3f}, {:.3f}) fot".format(
+                e_m, n_m, pos.X, pos.Y, pos.Z
+            )
+        )
+    except Exception:
+        pass
+
     return e_m, n_m, pos
 
 
@@ -343,24 +520,40 @@ def opprett_toposolid(doc, punkter, base_pos):
         )
 
     xyz_punkter = List[XYZ]()
+    z_verdier_ft = []
     for x_rel, y_rel, z_rel in punkter:
         x_ft = UnitUtils.ConvertToInternalUnits(x_rel, _METER) + base_pos.X
         y_ft = UnitUtils.ConvertToInternalUnits(y_rel, _METER) + base_pos.Y
         z_ft = UnitUtils.ConvertToInternalUnits(z_rel, _METER) + base_pos.Z
         xyz_punkter.Add(XYZ(x_ft, y_ft, z_ft))
+        z_verdier_ft.append(z_ft)
 
     toposolid_type_id = FilteredElementCollector(doc).OfClass(ToposolidType).FirstElementId()
     if toposolid_type_id == ElementId.InvalidElementId:
         raise Exception("Fant ingen ToposolidType i prosjektet.")
 
-    levels = list(FilteredElementCollector(doc).OfClass(Level))
-    if not levels:
-        raise Exception("Fant ingen Level i prosjektet — Toposolid trenger et nivå.")
-    level = min(levels, key=lambda l: l.Elevation)
+    # Toposolid.Create bygger et volum ned til det gitte Level, ikke en
+    # tynn skive - vi trenger derfor et Level plassert like under
+    # laveste terrengpunkt (samme virkemaate som nettapp-CSV-importen
+    # ga, ca. 1 m under laveste kote), i stedet for prosjektets
+    # eksisterende laveste niva (som typisk ligger paa kote 0).
+    TYKKELSE_UNDER_LAVESTE_M = 1.0
+    z_min_ft = min(z_verdier_ft)
+    onsket_niva_ft = z_min_ft - UnitUtils.ConvertToInternalUnits(TYKKELSE_UNDER_LAVESTE_M, _METER)
+    TOLERANSE_FT = UnitUtils.ConvertToInternalUnits(0.05, _METER)  # 5 cm
 
     t = Transaction(doc, "Lag Toposolid fra Kartverket-data")
     t.Start()
     try:
+        level = None
+        for lvl in FilteredElementCollector(doc).OfClass(Level):
+            if abs(lvl.Elevation - onsket_niva_ft) < TOLERANSE_FT:
+                level = lvl
+                break
+        if level is None:
+            level = Level.Create(doc, onsket_niva_ft)
+            level.Name = "Terreng - Kartverket import"
+
         Toposolid.Create(doc, xyz_punkter, toposolid_type_id, level.Id)
         t.Commit()
     except Exception as ex:
@@ -487,7 +680,37 @@ def vis_vindu(doc):
     window.Height = 900
     window.WindowStartupLocation = WindowStartupLocation.CenterScreen
 
+    # Gjoer vinduet til et EKTE Windows-modalt vindu, eid av Revit sitt
+    # hovedvindu. Uten dette blokkerer ShowDialog() kun vaar egen traad,
+    # mens Revit sitt vindu fortsatt kan motta klikk fra brukeren - noe
+    # som gir en usikker/inkonsistent tilstand (og i praksis krasj) hvis
+    # brukeren samhandler med modellen foer vinduet vaart er lukket.
+    if _HAR_COMPONENT_MANAGER:
+        try:
+            import System.Windows.Interop as _interop
+            _helper = _interop.WindowInteropHelper(window)
+            _helper.Owner = ComponentManager.ApplicationWindow
+        except Exception:
+            pass  # faller tilbake til vanlig (svakere) modalitet under
+
     webview = WebView2()
+
+    # WebView2 prover som standard aa lagre brukerdata ved siden av
+    # verts-EXE-en (her: Revit.exe i Program Files), som normalt ikke
+    # er skrivbar uten admin. I stedet for aa bruke
+    # CoreWebView2CreationProperties (som krever en type fra
+    # Microsoft.Web.WebView2.Core - og pyRevit kan ha en annen versjon
+    # av DENNE DLL-en allerede lastet, med annen API-overflate), setter
+    # vi miljovariabelen WEBVIEW2_USER_DATA_FOLDER, som den native
+    # WebView2Loader.dll leser direkte, uavhengig av .NET-typeversjon.
+    # MAA settes foer EnsureCoreWebView2Async kalles.
+    import tempfile
+    _user_data_dir = os.path.join(tempfile.gettempdir(), "KartverketToposolidWebView2")
+    try:
+        os.makedirs(_user_data_dir, exist_ok=True)
+    except Exception:
+        pass
+    os.environ["WEBVIEW2_USER_DATA_FOLDER"] = _user_data_dir
     window.Content = webview
 
     def on_web_message(sender, args):
@@ -518,10 +741,11 @@ def vis_vindu(doc):
             webview.CoreWebView2.WebMessageReceived += on_web_message
             webview.CoreWebView2.NavigateToString(html)
         else:
-            forms.alert(
+            _vis_feilmelding(
+                "WebView2-feil",
                 "WebView2 kunne ikke initialiseres. Sjekk at WebView2 Runtime "
                 "er installert, og at DLL-ene ligger i pushbutton-mappen.\n\n{}"
-                .format(args.InitializationException)
+                .format(args.InitializationException),
             )
 
     webview.CoreWebView2InitializationCompleted += on_init
@@ -535,8 +759,10 @@ def vis_vindu(doc):
 # ====================================================================
 
 if __name__ == "__main__":
-    doc = revit.doc
+    # __revit__ injiseres alltid av pyRevit sin kjerne-loader, uansett
+    # motor (IronPython/CPython) - trygg erstatning for pyrevit.revit.doc.
+    doc = __revit__.ActiveUIDocument.Document
     try:
         vis_vindu(doc)
     except Exception as e:
-        forms.alert("Kunne ikke åpne Kartverket → Revit Toposolid:\n\n{}".format(e))
+        _vis_feilmelding("Feil", "Kunne ikke åpne Kartverket → Revit Toposolid:\n\n{}".format(e))
