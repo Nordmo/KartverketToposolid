@@ -15,18 +15,19 @@ Krever **Revit 2024 eller nyere** (Toposolid finnes ikke i eldre versjoner).
 ## Engangsoppsett
 
 Dette gjøres én gang per PC, ikke hver gang du bruker knappen. Regn med
-15–20 minutter første gang.
+10 minutter første gang.
 
 ### 1. Installer PyRevit
 
-Last ned fra [pyrevitlabs.io](https://pyrevitlabs.io) hvis du ikke
-allerede har det.
+Sjekk først **Software Center** (Multiconsult) — PyRevit ligger normalt
+tilgjengelig der, og installeres uten at du trenger admin-rettigheter.
+
+Finner du den ikke der, last ned fra
+[pyrevitlabs.io](https://pyrevitlabs.io) i stedet.
 
 ### 2. Last ned og installer i ett steg
 
-Alle kommandoer i denne guiden kjøres i **PowerShell** — ikke i
-Kommandoprompt/`cmd.exe`, siden `.ps1`-script kun fungerer i
-PowerShell.
+Alle kommandoer i denne guiden kjøres i **PowerShell**.
 
 **Slik åpner du PowerShell:**
 1. Trykk på **Windows-tasten** (eller klikk på Start-menyen)
@@ -99,7 +100,7 @@ Lukk innstillingene, trykk **Reload** på pyRevit-fanen. Knappen **"Lag
 Toposolid"** skal nå dukke opp under fanen **KartverketToposolid** →
 panelet **DTM**.
 
-### 4. Test
+### 4. Ferdig — lag din første Toposolid
 
 1. **Restart Revit helt** (ikke bare Reload — luk hele programmet,
    sjekk i Oppgavebehandling at `Revit.exe` er borte)
@@ -192,7 +193,6 @@ KartverketToposolid.extension/
             ├── script.py
             ├── ui.html
             ├── icon.png                          ← egen logo
-            ├── icon.dark.png                      ← mørk temavariant
             ├── Microsoft.Web.WebView2.Core.dll   ← hentes i setup.ps1
             ├── Microsoft.Web.WebView2.Wpf.dll    ← hentes i setup.ps1
             └── WebView2Loader.dll                ← hentes i setup.ps1
