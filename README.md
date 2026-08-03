@@ -137,6 +137,33 @@ du feilsøker videre — se **Feilsøking** under.
 
 ---
 
+## Oppdatering
+
+Verktøyet endrer seg fra tid til annen. Slik henter du nyeste versjon,
+avhengig av hvordan du installerte det:
+
+**Installerte du via ett-kommando-installasjonen (de fleste):**
+Kjør nøyaktig samme kommando som i steg 2 på nytt:
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force; irm https://raw.githubusercontent.com/Nordmo/KartverketToposolid/main/bootstrap.ps1 | iex
+```
+Den oppdager selv at en tidligere versjon finnes, erstatter den med
+nyeste fra GitHub, og kjører `setup.ps1` på nytt automatisk (hopper
+over det som allerede er i orden, som f.eks. Python-pakkene).
+
+**Installerte du via Git (utviklersporet):**
+```powershell
+cd "$([Environment]::GetFolderPath('MyDocuments'))\GitRepos\KartverketToposolid"
+git pull
+```
+
+**Etter begge deler:** trykk **Reload** på pyRevit-fanen. Kun
+nødvendig å kjøre `setup.ps1` på nytt hvis oppdateringen faktisk endret
+noe i selve oppsettet (nye avhengigheter e.l.) — helt ufarlig å gjøre
+uansett hvis du er usikker.
+
+---
+
 ## Slik ser det ut
 
 ![Knappen i Revit-båndet](docs/images/knapp.png)
