@@ -47,16 +47,18 @@ være installert:
 - Pakker den ut i `Dokumenter\GitRepos\KartverketToposolid` (samme
   robuste mappe-deteksjon som resten av verktøyet bruker — fungerer
   uansett om "Dokumenter" er omdirigert til OneDrive eller ikke)
-- Kjører `setup.ps1` automatisk med det samme (se hva den gjør i
-  steg 4 under)
+- Kjører `setup.ps1` automatisk med det samme — den henter
+  WebView2-komponentene fra NuGet og installerer `numpy`, `rasterio`
+  og `pyproj` rett inn i PyRevit sin `site-packages`-mappe, uten at du
+  trenger administrator-rettigheter
 
 `Set-ExecutionPolicy -Scope Process ...` fjerner kun Windows sin
 standard-sperre mot å kjøre script **for denne ene PowerShell-økten**
 — ingen permanente endringer på maskinen din.
 
 Følg med i vinduet — scriptet spør deg om bekreftelse hvis det trenger
-å laste ned en manglende Python-versjon underveis (se steg 4 for
-detaljer om hva som skjer).
+å laste ned en manglende Python-versjon underveis (se **Feilsøking**
+lenger ned for detaljer om hva som skjer).
 
 <details>
 <summary><b>Alternativ: bruk Git i stedet (for videre utvikling)</b></summary>
@@ -97,45 +99,7 @@ Lukk innstillingene, trykk **Reload** på pyRevit-fanen. Knappen **"Lag
 Toposolid"** skal nå dukke opp under fanen **KartverketToposolid** →
 panelet **DTM**.
 
-### 4. Hva `setup.ps1` gjør (kjørte allerede automatisk i steg 2)
-
-`setup.ps1` automatiserer det som ellers er mest tidkrevende: henter
-WebView2-komponentene fra NuGet automatisk, finner riktig
-Python-versjon på maskinen din, og installerer `numpy`, `rasterio` og
-`pyproj` rett inn i PyRevit sin `site-packages`-mappe. Krever ingen
-administrator-rettigheter.
-
-Måtte du kjøre den på nytt av en eller annen grunn (f.eks. etter en
-feilrettelse), gjør du det fra mappen den ble lastet ned til:
-```powershell
-cd "$([Environment]::GetFolderPath('MyDocuments'))\GitRepos\KartverketToposolid"
-.\setup.ps1
-```
-
-**Får du feilmeldingen "running scripts is disabled on this system"** —
-Windows blokkerer som standard kjøring av `.ps1`-filer. Kjør i stedet:
-```powershell
-powershell -ExecutionPolicy Bypass -File .\setup.ps1
-```
-(dette endrer ingen permanente innstillinger — kun for denne ene
-kjøringen)
-
-Har du **ikke** en Python-installasjon som matcher versjonen PyRevit
-bruker (scriptet forteller deg nøyaktig hvilken), tilbyr scriptet å
-laste den ned og installere den **automatisk** — stille, per bruker,
-uten admin-rettigheter, og uten å røre PATH eller andre
-Python-installasjoner du har fra før. Du blir spurt om bekreftelse
-(j/n) før noe installeres. Dette er kun satt opp for versjoner vi har
-bekreftet fungerer (per nå: Python 3.12) — trenger du en annen
-hovedversjon, faller scriptet tilbake til å be deg installere manuelt
-og lime inn stien, akkurat som før.
-
-**Sjekk i tillegg at WebView2 Runtime er installert** (de fleste
-Windows 10/11-maskiner har den fra før via Edge — scriptet sjekker
-dette for deg og varsler hvis den mangler):
-`https://go.microsoft.com/fwlink/p/?LinkId=2124703`
-
-### 5. Test
+### 4. Test
 
 1. **Restart Revit helt** (ikke bare Reload — luk hele programmet,
    sjekk i Oppgavebehandling at `Revit.exe` er borte)
@@ -156,6 +120,15 @@ forteller dialogboksen nøyaktig hvilket steg som feilet, og pyRevit sin
 
 De vanligste feilene og løsningene er allerede håndtert i koden basert
 på reell feilsøking:
+- **"running scripts is disabled on this system"** ved manuell kjøring
+  av `setup.ps1` (utenom ett-kommando-installasjonen i steg 2, som
+  allerede håndterer dette selv) → enkel og klar løsning, kjør i
+  stedet:
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File .\setup.ps1
+  ```
+  (dette endrer ingen permanente innstillinger — kun for denne ene
+  kjøringen)
 - **"Fant ingen pyRevit-installasjon med en CPython-motor"** → åpne
   **pyRevit**-fanen → **Settings**, og sjekk at nedtrekksmenyen
   **"Active CPython Engine"** faktisk har et valg (f.eks. "CPython
@@ -168,8 +141,15 @@ på reell feilsøking:
   PyRevit på nytt fra [pyrevitlabs.io](https://pyrevitlabs.io).
 - **WebView2-relaterte feil ved andre forsøk i samme økt** → restart
   Revit helt, ikke bare Reload
-- **"No module named X"** → feil Python-miljø i steg 4, dobbeltsjekk at
-  hovedversjonen faktisk stemmer med PyRevit sin CPython-motor
+- **"No module named X"** → feil Python-miljø, dobbeltsjekk at
+  hovedversjonen faktisk stemmer med PyRevit sin CPython-motor. Scriptet
+  tilbyr å laste ned og installere riktig versjon **automatisk** —
+  stille, per bruker, uten admin-rettigheter, og uten å røre PATH eller
+  andre Python-installasjoner du har fra før (du blir spurt om
+  bekreftelse (j/n) først). Dette er kun satt opp for versjoner vi har
+  bekreftet fungerer (per nå: Python 3.12) — trenger du en annen
+  hovedversjon, faller scriptet tilbake til å be deg installere manuelt
+  og lime inn stien.
 - **"Name must be unique"** ved gjentatt bruk → skal ikke lenger skje
   (fikset ved å navngi opprettede Level ut fra kote)
 - **PyRevit er installert sentralt av IT til `Program Files`** (vanlig
@@ -179,6 +159,16 @@ på reell feilsøking:
   PyRevit selv støtter for nettopp dette). Krever ingen admin-rettigheter
   eller IT-involvering — men **du må restarte Revit helt** etterpå for
   at endringen skal tre i kraft (miljøvariabler leses kun ved oppstart).
+- **Trenger å kjøre `setup.ps1` på nytt** (f.eks. etter en
+  feilrettelse)? Gjør det fra mappen den ble lastet ned til:
+  ```powershell
+  cd "$([Environment]::GetFolderPath('MyDocuments'))\GitRepos\KartverketToposolid"
+  .\setup.ps1
+  ```
+- **WebView2 Runtime mangler** → scriptet sjekker dette automatisk og
+  varsler deg hvis den ikke finnes (de fleste Windows 10/11-maskiner
+  har den fra før via Edge). Test manuelt om nødvendig:
+  `https://go.microsoft.com/fwlink/p/?LinkId=2124703`
 
 Skulle noe likevel feile på selve `Toposolid.Create(...)`-linjen i
 `opprett_toposolid()` i `script.py` — dette er den ene delen av koden
