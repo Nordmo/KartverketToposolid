@@ -20,7 +20,7 @@ Dette gjøres én gang per PC, ikke hver gang du bruker knappen. Regn med
 ### 1. Installer PyRevit
 
 Last ned fra [pyrevitlabs.io](https://pyrevitlabs.io) hvis du ikke
-allerede har det. (Software Center MC)
+allerede har det.
 
 ### 2. Hent ned dette repoet
 
@@ -38,11 +38,18 @@ Et mørkt tekstvindu åpner seg. Lim inn (eller skriv) kommandoene under,
 én linje om gangen, og trykk Enter etter hver:
 
 ```powershell
-cd Dokumenter
-mkdir GitRepos
+cd $env:USERPROFILE
+mkdir GitRepos -ErrorAction SilentlyContinue
 cd GitRepos
 git clone https://github.com/Nordmo/KartverketToposolid.git
 ```
+
+`$env:USERPROFILE` peker alltid rett til din egen brukermappe (f.eks.
+`C:\Users\<dittnavn>`), uansett hvor PowerShell tilfeldigvis åpnet seg
+(noen ganger åpnes den i `C:\WINDOWS\system32` i stedet — da vil vanlig
+`cd Dokumenter` feile). `-ErrorAction SilentlyContinue` gjør at
+`mkdir`-linjen ikke klager hvis mappen allerede finnes fra en tidligere
+kjøring.
 
 **Har du ikke Git installert**, feiler siste linje med en melding om at
 `git` ikke er en kjent kommando. Last ned og installer Git fra
@@ -52,7 +59,7 @@ prøv igjen.
 
 Etter at kommandoene er kjørt, ligger repoet i:
 ```
-Dokumenter\GitRepos\KartverketToposolid
+C:\Users\<ditt-brukernavn>\GitRepos\KartverketToposolid
 ```
 
 ### 3. Koble mappen til PyRevit
@@ -79,7 +86,7 @@ Krever ingen administrator-rettigheter.
 Åpne PowerShell (se fremgangsmåte i del 2 hvis du har lukket det
 vinduet siden sist), naviger til mappen du klonet, og kjør:
 ```powershell
-cd Dokumenter\GitRepos\KartverketToposolid
+cd $env:USERPROFILE\GitRepos\KartverketToposolid
 ```
 Deretter:
 ```powershell
