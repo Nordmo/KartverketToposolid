@@ -153,13 +153,6 @@ du feilsøker videre — se **Feilsøking** under.
   ![Hele flyten](docs/images/flyt.gif)
 -->
 
-En kort GIF av hele flyten (PowerShell → installasjon → Revit → knapp
-→ ferdig terreng) er en fin utvidelse her etter hvert som verktøyet har
-vist seg stabilt på et par flere maskiner.
-[ScreenToGif](https://www.screentogif.com/) (gratis, Windows) er et
-enkelt verktøy for å lage en slik selv — tar opp skjermen direkte til
-GIF-format, ingen etterredigering nødvendig for noe så kort.
-
 ---
 
 ## Feilsøking
