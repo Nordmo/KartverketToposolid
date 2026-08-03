@@ -7,8 +7,14 @@
   (se README.md steg 1-3). Automatiserer:
     - Henter WebView2-komponentene fra NuGet (i stedet for manuell
       nedlasting + endre filendelse + pakke ut + finne riktige filer)
-    - Finner/verifiserer riktig Python-versjon og installerer
-      numpy/rasterio/pyproj rett inn i pyRevit sin site-packages
+    - Finner en lokal Python med riktig hovedversjon - eller tilbyr aa
+      laste ned og installere den stille (per bruker, ingen admin) hvis
+      versjonen er kjent (se $kjenteVersjoner lenger ned)
+    - Installerer numpy/rasterio/pyproj rett inn i pyRevit sin
+      site-packages
+
+  Hopper automatisk over installasjon av det som allerede finnes -
+  trygt aa kjore paa nytt om noe feilet underveis forrige gang.
 
   Krever INGEN administrator-rettigheter.
 
@@ -84,13 +90,61 @@ if (-not $pythonExe) {
 }
 
 if (-not $pythonExe) {
+    # Kjente, bekreftede fullversjoner per hovedversjon (siste utgivelse
+    # MED Windows-installer - nyere delversjoner har ofte kun kildekode,
+    # se README). Utvid denne listen etter hvert som flere hovedversjoner
+    # er testet og bekreftet aa fungere.
+    $kjenteVersjoner = @{
+        "3.12" = "3.12.10"
+    }
+
     Write-Host ""
     Write-Host "Fant ingen installert Python $maalVersjon.x." -ForegroundColor Yellow
-    Write-Host "Last ned fra: https://www.python.org/downloads/release/  (soek opp Python $maalVersjon)"
-    Write-Host "NB: sjekk at siden faktisk har en 'Windows installer (64-bit)' - noen delversjoner har kun kildekode."
-    Write-Host "IKKE huk av 'Add to PATH' under installasjonen."
-    Write-Host ""
-    $pythonExe = Read-Host "Lim inn full sti til python.exe naar installert (Enter for aa avbryte)"
+
+    if ($kjenteVersjoner.ContainsKey($maalVersjon)) {
+        $fullVersjon = $kjenteVersjoner[$maalVersjon]
+        Write-Host "Scriptet kan laste ned og installere Python $fullVersjon automatisk:"
+        Write-Host "  - Ingen administrator-rettigheter noedvendig (per-bruker-installasjon)"
+        Write-Host "  - Legges IKKE til i PATH (paavirker ikke andre Python-installasjoner du har)"
+        Write-Host "  - Installeres til standard per-bruker-mappe (samme som en vanlig manuell installasjon)"
+        Write-Host ""
+        $svar = Read-Host "Vil du at scriptet gjoer dette automatisk? (j/n)"
+
+        if ($svar -match "^[jJ]") {
+            Write-Host ""
+            Write-Host "Laster ned Python $fullVersjon ..."
+            $installerUrl = "https://www.python.org/ftp/python/$fullVersjon/python-$fullVersjon-amd64.exe"
+            $installerPath = Join-Path $env:TEMP "python-$fullVersjon-amd64.exe"
+            Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
+
+            Write-Host "Installerer stille (per bruker, ingen admin) - kan ta et minutt ..."
+            $installArgs = @("/quiet", "InstallAllUsers=0", "PrependPath=0", "Include_test=0")
+            Start-Process -FilePath $installerPath -ArgumentList $installArgs -Wait
+            Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+
+            $forventetSti = "$env:LOCALAPPDATA\Programs\Python\Python$major$minor\python.exe"
+            if (Test-Path $forventetSti) {
+                $pythonExe = $forventetSti
+                Write-Host "Python $fullVersjon installert." -ForegroundColor Green
+            } else {
+                Write-Host "Installasjonen ser ut til aa ha kjort, men fant ikke python.exe paa forventet sted:" -ForegroundColor Yellow
+                Write-Host "  $forventetSti"
+                $pythonExe = Read-Host "Lim inn full sti til python.exe (Enter for aa avbryte)"
+            }
+        }
+    } else {
+        Write-Host "Automatisk nedlasting er ikke satt opp for Python $maalVersjon ennaa."
+    }
+
+    if (-not $pythonExe) {
+        Write-Host ""
+        Write-Host "Last ned manuelt fra: https://www.python.org/downloads/release/  (soek opp Python $maalVersjon)"
+        Write-Host "NB: sjekk at siden faktisk har en 'Windows installer (64-bit)' - noen delversjoner har kun kildekode."
+        Write-Host "IKKE huk av 'Add to PATH' under installasjonen."
+        Write-Host ""
+        $pythonExe = Read-Host "Lim inn full sti til python.exe naar installert (Enter for aa avbryte)"
+    }
+
     if (-not $pythonExe -or -not (Test-Path $pythonExe)) {
         Write-Error "Ingen gyldig python.exe oppgitt. Avbryter."
         exit 1

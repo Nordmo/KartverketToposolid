@@ -66,9 +66,14 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 kjøringen)
 
 Har du **ikke** en Python-installasjon som matcher versjonen PyRevit
-bruker (scriptet forteller deg nøyaktig hvilken), stopper scriptet opp
-og ber deg installere den ene manglende tingen — resten kjører
-automatisk når du limer inn stien.
+bruker (scriptet forteller deg nøyaktig hvilken), tilbyr scriptet å
+laste den ned og installere den **automatisk** — stille, per bruker,
+uten admin-rettigheter, og uten å røre PATH eller andre
+Python-installasjoner du har fra før. Du blir spurt om bekreftelse
+(j/n) før noe installeres. Dette er kun satt opp for versjoner vi har
+bekreftet fungerer (per nå: Python 3.12) — trenger du en annen
+hovedversjon, faller scriptet tilbake til å be deg installere manuelt
+og lime inn stien, akkurat som før.
 
 **Sjekk i tillegg at WebView2 Runtime er installert** (de fleste
 Windows 10/11-maskiner har den fra før via Edge — scriptet sjekker
@@ -100,6 +105,8 @@ på reell feilsøking:
   Revit helt, ikke bare Reload
 - **"No module named X"** → feil Python-miljø i steg 5, dobbeltsjekk at
   hovedversjonen faktisk stemmer med PyRevit sin CPython-motor
+- **"Name must be unique"** ved gjentatt bruk → skal ikke lenger skje
+  (fikset ved å navngi opprettede Level ut fra kote)
 
 Skulle noe likevel feile på selve `Toposolid.Create(...)`-linjen i
 `opprett_toposolid()` i `script.py` — dette er den ene delen av koden
@@ -113,7 +120,7 @@ Revit-oppdatering.
 ## Mappestruktur
 
 ```
-setup.ps1                              ← kjør dette først (steg 4)
+setup.ps1                              ← kjør dette foerst (steg 4)
 KartverketToposolid.extension/
 └── KartverketToposolid.tab/
     └── DTM.panel/
@@ -122,6 +129,7 @@ KartverketToposolid.extension/
             ├── script.py
             ├── ui.html
             ├── icon.png                          ← egen logo
+            ├── icon.dark.png                      ← mørk temavariant
             ├── Microsoft.Web.WebView2.Core.dll   ← hentes i steg 4
             ├── Microsoft.Web.WebView2.Wpf.dll    ← hentes i steg 4
             └── WebView2Loader.dll                ← hentes i steg 4
