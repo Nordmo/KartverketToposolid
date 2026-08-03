@@ -22,11 +22,11 @@ Dette gjøres én gang per PC, ikke hver gang du bruker knappen. Regn med
 Last ned fra [pyrevitlabs.io](https://pyrevitlabs.io) hvis du ikke
 allerede har det.
 
-### 2. Hent ned dette repoet
+### 2. Last ned og installer i ett steg
 
-Alle kommandoer i denne guiden (også `setup.ps1` senere) kjøres i
-**PowerShell** — ikke i Kommandoprompt/`cmd.exe`, siden `.ps1`-script
-og en del av syntaksen under kun fungerer i PowerShell.
+Alle kommandoer i denne guiden kjøres i **PowerShell** — ikke i
+Kommandoprompt/`cmd.exe`, siden `.ps1`-script kun fungerer i
+PowerShell.
 
 **Slik åpner du PowerShell:**
 1. Trykk på **Windows-tasten** (eller klikk på Start-menyen)
@@ -34,12 +34,35 @@ og en del av syntaksen under kun fungerer i PowerShell.
 3. Klikk på **Windows PowerShell** i søkeresultatet (blått ikon — ikke
    "Kommandoprompt"/"Command Prompt", som er noe annet)
 
-Et mørkt tekstvindu åpner seg. Lim inn (eller skriv) kommandoene under,
-én linje om gangen, og trykk Enter etter hver. **Lim inn kun én linje
-om gangen** — limer du inn alle fire på én gang, kan et linjeskift
-noen ganger "spises" av terminalen og lime to linjer sammen til én
-(du vil da se en rar feilmelding om et uventet tegn på slutten av
-kommandoen):
+Et mørkt tekstvindu åpner seg. Lim inn denne **ene linjen** og trykk
+Enter:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force; irm https://raw.githubusercontent.com/Nordmo/KartverketToposolid/main/bootstrap.ps1 | iex
+```
+
+Denne ene linjen gjør alt følgende automatisk, uten at Git trenger å
+være installert:
+- Laster ned nyeste versjon av verktøyet direkte fra GitHub
+- Pakker den ut i `Dokumenter\GitRepos\KartverketToposolid` (samme
+  robuste mappe-deteksjon som resten av verktøyet bruker — fungerer
+  uansett om "Dokumenter" er omdirigert til OneDrive eller ikke)
+- Kjører `setup.ps1` automatisk med det samme (se hva den gjør i
+  steg 4 under)
+
+`Set-ExecutionPolicy -Scope Process ...` fjerner kun Windows sin
+standard-sperre mot å kjøre script **for denne ene PowerShell-økten**
+— ingen permanente endringer på maskinen din.
+
+Følg med i vinduet — scriptet spør deg om bekreftelse hvis det trenger
+å laste ned en manglende Python-versjon underveis (se steg 4 for
+detaljer om hva som skjer).
+
+<details>
+<summary><b>Alternativ: bruk Git i stedet (for videre utvikling)</b></summary>
+
+Skal du selv gjøre endringer i koden og committe dem, er et ekte
+git-repo bedre enn zip-nedlastingen over:
 
 ```powershell
 $dokumenter = [Environment]::GetFolderPath("MyDocuments")
@@ -47,62 +70,45 @@ cd $dokumenter
 mkdir GitRepos -ErrorAction SilentlyContinue
 cd GitRepos
 git clone https://github.com/Nordmo/KartverketToposolid.git
+cd KartverketToposolid
+.\setup.ps1
 ```
 
-`[Environment]::GetFolderPath("MyDocuments")` spør Windows direkte om
-hvor "Dokumenter" faktisk ligger *akkurat nå* — i stedet for å gjette
-på et mappenavn. Dette fungerer riktig uansett om PowerShell åpnet et
-uventet sted (som `C:\WINDOWS\system32`), og uansett om "Dokumenter" er
-omdirigert til OneDrive (vanlig i bedrifts-oppsett, f.eks.
-`C:\Users\<navn>\OneDrive - Multiconsult\Documents`) eller ligger lokalt
-som vanlig. `-ErrorAction SilentlyContinue` gjør at `mkdir`-linjen ikke
-klager hvis mappen allerede finnes fra en tidligere kjøring.
+**Lim inn kun én linje om gangen** — limer du inn alle linjene på én
+gang, kan et linjeskift noen ganger "spises" av terminalen og lime to
+linjer sammen til én.
 
-**Har du ikke Git installert**, feiler siste linje med en melding om at
-`git` ikke er en kjent kommando. Last ned og installer Git fra
-[git-scm.com/downloads](https://git-scm.com/downloads) (standardvalgene
-i installasjonsveiviseren er fine), lukk og åpne PowerShell på nytt, og
-prøv igjen.
+**Har du ikke Git installert**, feiler `git clone`-linjen med en
+melding om at `git` ikke er en kjent kommando. Last ned og installer
+fra [git-scm.com/downloads](https://git-scm.com/downloads)
+(standardvalgene er fine), lukk og åpne PowerShell på nytt, og prøv
+igjen.
 
-Etter at kommandoene er kjørt, ligger repoet i `GitRepos\KartverketToposolid`
-inni din faktiske Dokumenter-mappe (lokal eller OneDrive-omdirigert).
-Usikker på nøyaktig sti? Kjør denne i PowerShell for å se den:
-```powershell
-[Environment]::GetFolderPath("MyDocuments")
-```
+</details>
 
 ### 3. Koble mappen til PyRevit
 
 I Revit: **pyRevit**-fanen → **Settings** → **Custom Extension
-Directories** → legg til stien til mappen du klonet
-(`...\GitRepos\KartverketToposolid`, altså mappen som *inneholder*
-`.extension`-mappen).
+Directories** → legg til stien til mappen som ble opprettet
+(`...\Dokumenter\GitRepos\KartverketToposolid`, altså mappen som
+*inneholder* `.extension`-mappen).
 
 Lukk innstillingene, trykk **Reload** på pyRevit-fanen. Knappen **"Lag
 Toposolid"** skal nå dukke opp under fanen **KartverketToposolid** →
 panelet **DTM**.
 
-Trykker du på den nå, feiler den — det er forventet. To ting gjenstår.
+### 4. Hva `setup.ps1` gjør (kjørte allerede automatisk i steg 2)
 
-### 4. Kjør det automatiske oppsett-scriptet
+`setup.ps1` automatiserer det som ellers er mest tidkrevende: henter
+WebView2-komponentene fra NuGet automatisk, finner riktig
+Python-versjon på maskinen din, og installerer `numpy`, `rasterio` og
+`pyproj` rett inn i PyRevit sin `site-packages`-mappe. Krever ingen
+administrator-rettigheter.
 
-`setup.ps1` (ligger i repo-roten) automatiserer det som ellers er mest
-tidkrevende: henter WebView2-komponentene fra NuGet automatisk, finner
-riktig Python-versjon på maskinen din, og installerer `numpy`,
-`rasterio` og `pyproj` rett inn i PyRevit sin `site-packages`-mappe.
-Krever ingen administrator-rettigheter.
-
-Åpne PowerShell (se fremgangsmåte i del 2 hvis du har lukket det
-vinduet siden sist), naviger til mappen du klonet — **lim inn disse to
-linjene hver for seg**, ikke samtidig:
+Måtte du kjøre den på nytt av en eller annen grunn (f.eks. etter en
+feilrettelse), gjør du det fra mappen den ble lastet ned til:
 ```powershell
-$dokumenter = [Environment]::GetFolderPath("MyDocuments")
-```
-```powershell
-cd "$dokumenter\GitRepos\KartverketToposolid"
-```
-Deretter:
-```powershell
+cd "$([Environment]::GetFolderPath('MyDocuments'))\GitRepos\KartverketToposolid"
 .\setup.ps1
 ```
 
@@ -186,7 +192,8 @@ Revit-oppdatering.
 ## Mappestruktur
 
 ```
-setup.ps1                              ← kjør dette foerst (steg 4)
+bootstrap.ps1                          ← henter alt automatisk (steg 2)
+setup.ps1                              ← kjøres automatisk av bootstrap.ps1
 KartverketToposolid.extension/
 └── KartverketToposolid.tab/
     └── DTM.panel/
@@ -196,7 +203,7 @@ KartverketToposolid.extension/
             ├── ui.html
             ├── icon.png                          ← egen logo
             ├── icon.dark.png                      ← mørk temavariant
-            ├── Microsoft.Web.WebView2.Core.dll   ← hentes i steg 4
-            ├── Microsoft.Web.WebView2.Wpf.dll    ← hentes i steg 4
-            └── WebView2Loader.dll                ← hentes i steg 4
+            ├── Microsoft.Web.WebView2.Core.dll   ← hentes i setup.ps1
+            ├── Microsoft.Web.WebView2.Wpf.dll    ← hentes i setup.ps1
+            └── WebView2Loader.dll                ← hentes i setup.ps1
 ```
