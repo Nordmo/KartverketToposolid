@@ -309,7 +309,7 @@ _XAML = u"""
     <TextBlock x:Name="txtUtvalg" TextWrapping="Wrap" Margin="0,0,0,6"/>
     <WrapPanel Margin="0,0,0,10">
       <Button x:Name="btnTopo" Content="Velg toposolid" Padding="8,3" Margin="0,0,6,0"/>
-      <Button x:Name="btnVegger" Content="Velg stasjonsvegger" Padding="8,3" Margin="0,0,6,0"/>
+      <Button x:Name="btnVegger" Content="Velg vegger å sjekke" Padding="8,3" Margin="0,0,6,0"/>
       <Button x:Name="btnSkjerm" Content="Velg ekstra skjerming" Padding="8,3" Margin="0,0,6,0"/>
       <Button x:Name="btnNullSkjerm" Content="Fjern skjerming" Padding="8,3"/>
     </WrapPanel>
@@ -354,7 +354,9 @@ _XAML = u"""
     <CheckBox x:Name="chkKart" Content="Lag innsynskart (fargede ruter i terrenget)" Margin="0,2,0,10"/>
     <TextBlock TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,10">
       Terreng: Kartverket DTM (bart terreng, uten vegetasjon og bygg), med toposolidet lagt oppå.
-      Åpninger/porter i veggene vurderes ikke. Forrige resultat slettes ved ny kjøring.
+      Sjekker om innerflaten på de valgte veggene kan ses lavere enn «tillatt innsyn» under toppen,
+      over de andre veggene i stasjonen. Resten av stasjonen finnes automatisk.
+      Åpninger/porter vurderes ikke. Forrige resultat slettes ved ny kjøring.
     </TextBlock>
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
       <Button x:Name="btnKjor" Content="Kjør analyse" Padding="14,4" Margin="0,0,8,0" IsDefault="True"/>
@@ -391,7 +393,7 @@ def vis_dialog(state):
                   "IKKE VALGT" if not topo else
                   "id {}".format(id_tall(topo[0].Id)) if len(topo) == 1 else
                   "{} fliser fra Lag Toposolid".format(len(topo))),
-              "Stasjonsvegger: {}".format(len(state["vegger"]) or "INGEN VALGT"),
+              "Vegger som sjekkes for innsyn: {}".format(len(state["vegger"]) or "INGEN VALGT"),
               "Ekstra skjerming: {}".format(len(state["skjerm"]))]
     f("txtUtvalg").Text = "\n".join(linjer)
 
@@ -594,20 +596,24 @@ def kjor_analyse(doc, state, bp):
             "topp": np.array(T), "eier": E}
 
     n_str = K.antall_straaler(R, celle)
-    # Punkter langs veggtoppen starter et stykke inn fra endene, slik at
-    # linjene treffer selve veggen og ikke hjørnet mot naboveggen.
+    # Målpunktene på innerflaten starter et stykke inn fra endene, slik at
+    # de ligger på selve veggen og ikke i hjørnet mot naboveggen.
     innfelling = max(0.5, 0.5 * max(v["bredde"] for v in nettvegger) + 0.1)
+    etter_id = dict((w["id"], w) for w in nettvegger)
     resultater = []
     for i, v in enumerate(sjekkes):
         logg("Vegg {}/{}: {} (topp {:.2f}) ...".format(i + 1, len(sjekkes), v["navn"], v["topp"] - bpz))
         t = time.time()
+        innside = (-v["utside"][0], -v["utside"][1])
+        flate = K.innerflate_avstand(v, [etter_id[l] for l in v["lag"] if l in etter_id], innside)
         r = K.analyser_vegg(rn, H, v, hind, obs, res, n_str, state["pktavst"],
-                            nett_ids, v["utside"], krumning_paa=state["krumning"],
-                            innfelling=innfelling, logg=logg, lag_ids=v["lag"])
+                            innside, state["avstand"], nett_ids=nett_ids, lag_ids=v["lag"],
+                            flate_avstand=flate, krumning_paa=state["krumning"],
+                            innfelling=innfelling, logg=logg)
         dg = r["diagnose"]
-        logg("  {} punkter langs toppen. Observatører på utsiden og over toppen: {}, med fri sikt: {}, "
-             "som går inn over denne veggen: {}, med innsyn: {}".format(
-                 r["n_punkter"], dg["over_toppen"], dg["fri_sikt"], dg["inn_over_veggen"], dg["innsyn"]))
+        logg("  {} målpunkter på innerflaten. Observatører som står slik at de kan se innerflaten: {}, "
+             "som ser den {:.2f} m under toppen: {}, med innsyn: {}".format(
+                 r["n_punkter"], dg["paa_innsiden"], state["avstand"], dg["ser_kontrollhoyden"], dg["innsyn"]))
         r["vegg"] = v
         resultater.append(r)
         logg("  ferdig på {:.1f} s".format(time.time() - t))
@@ -748,9 +754,9 @@ def skriv_resultat(doc, state, an):
             verst = kand[np.argsort(-r["dybde"][kand])][: state["linjer"]]
             for i in verst:
                 O, P, T = K.siktlinje(obs, r, i)
-                avst = math.hypot(P[0] - O[0], P[1] - O[1])
+                avst = math.hypot(T[0] - O[0], T[1] - O[1])
                 e, n = til_crs(O[0], O[1])
-                kom = "Innsyn vegg {}: {:.2f} m under topp, avstand {:.0f} m, obs E {:.1f} N {:.1f}".format(
+                kom = "Innsyn mot vegg {}: ser {:.2f} m under topp, avstand {:.0f} m, obs E {:.1f} N {:.1f}".format(
                     v["navn"], r["dybde"][i], avst, e, n)
                 modell_linje(doc, O, P, stil_sikt, kom)
                 modell_linje(doc, P, T, stil_inne, kom)
@@ -789,12 +795,12 @@ def rapport(doc, state, an, slettet, n_linjer, n_ruter):
         n_inn = int((d > terskel).sum())
         rad = {"vegg": v["navn"], "topp": v["topp"] - bpz, "maks": float(d[i]), "n": n_inn}
         if d[i] > 0:
-            O, P, _ = K.siktlinje(obs, r, i)
+            O, _, T = K.siktlinje(obs, r, i)
             e, n = til_crs(O[0], O[1])
-            rad.update({"e": e, "n_": n, "z": O[2] - bpz, "avst": math.hypot(P[0] - O[0], P[1] - O[1])})
+            rad.update({"e": e, "n_": n, "z": O[2] - bpz, "avst": math.hypot(T[0] - O[0], T[1] - O[1])})
         tabell.append(rad)
         status = "INNSYN" if n_inn else "ok"
-        tekst = "Vegg {:<22} topp {:8.2f}  {:6}  maks {:5.2f} m under topp".format(
+        tekst = "Vegg {:<22} topp {:8.2f}  {:6}  ser ned til {:5.2f} m under topp".format(
             v["navn"], rad["topp"], status, rad["maks"])
         if "e" in rad:
             tekst += "  fra E {:.1f} N {:.1f} kote {:.1f} ({:.0f} m)  celler: {}".format(
@@ -871,7 +877,7 @@ def main():
                 else:
                     melding("Ingen av de valgte elementene er toposolider.")
         elif handling == "vegger":
-            el = plukk(uidoc, "Velg stasjonens vegger og trykk Finish (Fullfør)")
+            el = plukk(uidoc, "Velg veggene du vil sjekke for innsyn og trykk Finish (Fullfør)")
             if el is not None:
                 vegger = [e for e in el if isinstance(e, Wall)]
                 if len(vegger) < len(el):

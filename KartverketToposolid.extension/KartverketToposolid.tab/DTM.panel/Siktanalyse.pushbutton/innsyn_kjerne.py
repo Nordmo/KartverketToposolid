@@ -520,168 +520,200 @@ def punkter_langs_innfelt(polyline, avstand, innfelling):
     return np.array(pkt), np.array(tan)
 
 
-def analyser_vegg(rn, H, vegg, hindringer, obs, steg, n_straaler, punktavstand,
-                  nett_ids, utside, krumning_paa=True, innfelling=0.5,
-                  straale_bunt=192, logg=None, lag_ids=()):
-    """
-    vegg: {"id", "polyline", "topp", "bunn"} - veggen som sjekkes
-    hindringer: {"A", "B", "topp", "eier"} - fotavtrykk for ALLE vegger i
-        området + skjerming. Veggens egne segmenter (eier == id) utelates.
-    nett_ids: id-ene til veggene som utgjør stasjonen (finn_stasjonsnett)
-    utside: (nx, ny) - normal som peker ut av stasjonen (utside_normal)
+def innerflate_avstand(vegg, lagvegger_liste, innside):
+    """Avstand fra veggens senterlinje til innerflaten (inkl. eventuelle
+    lagvegger på innsiden), langs innside-normalen."""
+    u, a, _ = _akse(vegg["polyline"])
+    n = np.asarray(innside, dtype=float)
+    maks = 0.5 * float(vegg.get("bredde", 0.0))
+    for v in lagvegger_liste:
+        u2, a2, b2 = _akse(v["polyline"])
+        sentrum = float((0.5 * (a2 + b2) - a) @ n)
+        maks = max(maks, sentrum + 0.5 * float(v.get("bredde", 0.0)))
+    return maks
 
-    En siktlinje O -> P regnes for denne veggen bare hvis den går inn over
-    nettopp denne veggen: O ligger på utsiden, og linjen krysser ingen
-    annen stasjonsvegg før P. Inne i stasjonen fortsetter linjen med samme
-    fall til den treffer en stasjonsvegg som er høy nok til å stoppe den,
-    eller forlater stasjonen over motsatt vegg. Dybden er hvor langt under
-    veggtoppen linjen er der, begrenset til veggens høyde (gulvet).
+
+def analyser_vegg(rn, H, vegg, hindringer, obs, steg, n_straaler, punktavstand,
+                  innside, terskel, nett_ids=(), lag_ids=(), flate_avstand=None,
+                  krumning_paa=True, innfelling=0.5, straale_bunt=192, logg=None):
+    """
+    Innsyn MOT den valgte veggen: kan man utenfra se veggens INNERFLATE
+    lavere enn 'terskel' under veggtoppen?
+
+    vegg: {"id", "polyline", "topp", "bunn", "bredde"} - veggen som sjekkes
+    innside: (nx, ny) - normal som peker inn i stasjonen (fra innerflaten)
+    hindringer: fotavtrykk for alle vegger/skjermer (eier = vegg-id). Veggen
+        selv og lagvegger på den utelates (målpunktene ligger på flaten).
+    nett_ids: stasjonens vegger - brukes bare til å finne hvor siktlinjen
+        går inn i stasjonen (for tegning).
+
+    Metode: målpunkter T langs innerflaten (hver 'punktavstand' m, innfelt
+    fra hjørnene). For hvert T regnes en radiell horisont fra T i
+    kontrollhøyden z* = topp - terskel, over terreng og alle vegger -
+    også de andre stasjonsveggene, som er det som normalt stopper innsynet.
+    Observatører som ser T i høyden z* har innsyn. For dem regnes det
+    laveste synlige punktet på flaten eksakt:
+        z_min = maks over hindringer (D*h - r*z_O) / (D - r)
+    (r = avstand fra T, D = avstand til observatøren), begrenset av gulvet.
+    Dybden er topp - z_min.
     """
     ox, oy, oz = obs["x"], obs["y"], obs["z"]
     n_obs = ox.size
     beste = np.zeros(n_obs)
-    beste_px = np.full(n_obs, np.nan)
-    beste_py = np.full(n_obs, np.nan)
-    beste_fall = np.zeros(n_obs)
-    synlig_noen = np.zeros(n_obs, dtype=bool)
-    over_toppen = np.zeros(n_obs, dtype=bool)
-    ser_ubeh = np.zeros(n_obs, dtype=bool)
+    b_tx = np.full(n_obs, np.nan)
+    b_ty = np.full(n_obs, np.nan)
+    b_tz = np.full(n_obs, np.nan)
+    b_inn = np.zeros(n_obs)          # avstand fra T til der linjen går inn i stasjonen
+    kandidat = np.zeros(n_obs, dtype=bool)
+    ser_z = np.zeros(n_obs, dtype=bool)
 
     topp = float(vegg["topp"])
-    hoyde = max(0.0, topp - float(vegg["bunn"]))
-    zP = topp + 0.01   # P løftes 1 cm for å ikke skjermes av egen vegg
-    P, T = punkter_langs_innfelt(vegg["polyline"], punktavstand, innfelling)
+    bunn = float(vegg["bunn"])
+    z_k = topp - float(terskel)
+    if flate_avstand is None:
+        flate_avstand = 0.5 * float(vegg.get("bredde", 0.0))
+    off = flate_avstand + 0.02
+    P, Tan = punkter_langs_innfelt(vegg["polyline"], punktavstand, innfelling)
     dtheta = 2.0 * math.pi / n_straaler
 
     eier = np.asarray(hindringer["eier"], dtype=object)
     HA_alle = np.asarray(hindringer["A"], dtype=float).reshape(-1, 2)
     HB_alle = np.asarray(hindringer["B"], dtype=float).reshape(-1, 2)
     Ht_alle = np.asarray(hindringer["topp"], dtype=float)
-    egen = np.array([e == vegg["id"] for e in eier], dtype=bool)
-    lag = np.array([e in lag_ids for e in eier], dtype=bool)
-    # Lagvegger (fundament under, vangvegger inntil) er fysiske hindringer,
-    # men er ikke 'en annen stasjonsvegg' for inngangs- og dybdesjekken.
-    i_nett = np.array([e in nett_ids for e in eier], dtype=bool) & ~lag
-    HA, HB, Htopp = HA_alle[~egen], HB_alle[~egen], Ht_alle[~egen]
-    NA, NB, Ntopp = HA_alle[i_nett & ~egen], HB_alle[i_nett & ~egen], Ht_alle[i_nett & ~egen]
+    ute = np.array([(e == vegg["id"]) or (e in lag_ids) for e in eier], dtype=bool)
+    i_nett = np.array([e in nett_ids for e in eier], dtype=bool) & ~ute
+    HA, HB, Htopp = HA_alle[~ute], HB_alle[~ute], Ht_alle[~ute]
+    NA, NB, NT = HA_alle[i_nett], HB_alle[i_nett], Ht_alle[i_nett]
 
     for ip in range(len(P)):
-        px, py = float(P[ip, 0]), float(P[ip, 1])
-        nx, ny = T[ip, 1], -T[ip, 0]
-        if nx * utside[0] + ny * utside[1] < 0:
+        nx, ny = Tan[ip, 1], -Tan[ip, 0]
+        if nx * innside[0] + ny * innside[1] < 0:
             nx, ny = -nx, -ny
-        dx = ox - px
-        dy = oy - py
+        tx, ty = float(P[ip, 0] + nx * off), float(P[ip, 1] + ny * off)
+        dx = ox - tx
+        dy = oy - ty
         D = np.maximum(np.hypot(dx, dy), 1e-6)
-        a_obs = (oz - krumning(D, krumning_paa) - zP) / D
-        kand = np.nonzero(((dx * nx + dy * ny) > 0.02 * D) & (a_obs > 0))[0]
+        kand = np.nonzero((dx * nx + dy * ny) > 0.02 * D)[0]   # på innsiden av flaten
         if kand.size == 0:
             continue
-        over_toppen[kand] = True
+        kandidat[kand] = True
         Dk = D[kand]
+        zO = oz[kand] - krumning(Dk, krumning_paa)
+        a_obs = (zO - z_k) / Dk
         theta = np.arctan2(dy[kand], dx[kand])
         k = np.mod(np.round(theta / dtheta).astype(np.int64), n_straaler)
         straaler, inv = np.unique(k, return_inverse=True)
         n_s = int(math.ceil(Dk.max() / steg)) + 1
         s = steg * np.arange(1, n_s + 1)
         c_s = krumning(s, krumning_paa)
-        M = np.empty((straaler.size, n_s), dtype=np.float32)
+        HE = np.empty((straaler.size, n_s), dtype=np.float32)   # effektiv høyde langs strålen
         for b0 in range(0, straaler.size, straale_bunt):
             kk = straaler[b0:b0 + straale_bunt]
             ux = np.cos(kk * dtheta)
             uy = np.sin(kk * dtheta)
-            xs = px + ux[:, None] * s[None, :]
-            ys = py + uy[:, None] * s[None, :]
-            h = bilineaer(H, rn, xs, ys)
-            A = (h - c_s[None, :] - zP) / s[None, :]
+            h = bilineaer(H, rn, tx + ux[:, None] * s[None, :], ty + uy[:, None] * s[None, :])
+            he = h - c_s[None, :]
             if HA.size:
-                t = straale_segment_t(np.full(kk.size, px), np.full(kk.size, py),
-                                      ux, uy, HA, HB, tmin=0.01)
+                t = straale_segment_t(np.full(kk.size, tx), np.full(kk.size, ty), ux, uy, HA, HB, tmin=0.01)
                 treff = np.isfinite(t)
                 if treff.any():
                     ri, si = np.nonzero(treff)
                     tt = t[ri, si]
-                    ang = (Htopp[si] - krumning(tt, krumning_paa) - zP) / tt
                     jt = np.clip(np.ceil(tt / steg).astype(np.int64) - 1, 0, n_s - 1)
-                    np.maximum.at(A, (ri, jt), ang)
-            M[b0:b0 + straale_bunt] = np.maximum.accumulate(A, axis=1)
+                    np.maximum.at(he, (ri, jt), Htopp[si] - krumning(tt, krumning_paa))
+            HE[b0:b0 + straale_bunt] = he
+        # Synlighet i kontrollhøyden z*
+        M = np.maximum.accumulate((HE - z_k) / s[None, :], axis=1)
         utelat = Dk * dtheta / 2.0 + steg
         jO = np.floor((Dk - utelat) / steg).astype(np.int64) - 1
         hor = np.where(jO >= 0, M[inv, np.clip(jO, 0, n_s - 1)], -np.inf)
-        synlig = a_obs[kand] >= hor - 1e-9
+        # Grovsortering: vegger er lagt i nærmeste prøvepunkt BAK veggen, så
+        # horisonten her blokkerer litt for lite - aldri for mye.
+        synlig = a_obs >= hor - 1e-9
         if not synlig.any():
             continue
-        vi = kand[synlig]
-        ser_ubeh[vi] = True
-        Dv = D[vi]
-        ux = dx[vi] / Dv
-        uy = dy[vi] / Dv
+        vi_lok = np.nonzero(synlig)[0]
 
-        # Må gå inn over DENNE veggen: ingen annen stasjonsvegg mellom O og P
-        if NA.size:
-            t_ut = straale_segment_t(np.full(vi.size, px), np.full(vi.size, py), ux, uy, NA, NB, tmin=1e-3)
-            inn_her = ~(t_ut < Dv[:, None]).any(axis=1)
-            vi, Dv, ux, uy = vi[inn_her], Dv[inn_her], ux[inn_her], uy[inn_her]
-            if vi.size == 0:
-                continue
-        synlig_noen[vi] = True
+        # Laveste synlige punkt på flaten, eksakt mot alle hindringer på strålen
+        zmin = np.empty(vi_lok.size)
+        for c0 in range(0, vi_lok.size, 2000):
+            sel = vi_lok[c0:c0 + 2000]
+            rader = HE[inv[sel]]                                 # (m, n_s)
+            Dv = Dk[sel][:, None]
+            zv = zO[sel][:, None]
+            gyldig = np.arange(n_s)[None, :] <= jO[sel][:, None]
+            r = s[None, :]
+            krav = (Dv * rader - r * zv) / np.maximum(Dv - r, 1e-6)
+            krav = np.where(gyldig & np.isfinite(rader), krav, -np.inf)
+            zm = krav.max(axis=1)
+            # Stasjonsveggene (som normalt stopper innsynet) regnes eksakt
+            if NA.size:
+                Dn = Dk[sel]
+                ux_ = dx[kand[sel]] / Dn
+                uy_ = dy[kand[sel]] / Dn
+                t_n = straale_segment_t(np.full(sel.size, tx), np.full(sel.size, ty), ux_, uy_, NA, NB, tmin=0.01)
+                ok = np.isfinite(t_n) & (t_n < (Dn - utelat[sel])[:, None])
+                tt = np.where(ok, t_n, 0.0)
+                hn = NT[None, :] - krumning(tt, krumning_paa)
+                kn = (Dn[:, None] * hn - tt * zO[sel][:, None]) / np.maximum(Dn[:, None] - tt, 1e-6)
+                zm = np.maximum(zm, np.where(ok, kn, -np.inf).max(axis=1))
+            zmin[c0:c0 + 2000] = zm
+        zmin = np.maximum(zmin, bunn)
+        ser = zmin <= z_k + 1e-6
+        if not ser.any():
+            continue
+        vi_lok, zmin = vi_lok[ser], zmin[ser]
+        vi = kand[vi_lok]
+        ser_z[vi] = True
+        dyb = topp - zmin
 
-        fall = (oz[vi] - krumning(Dv, krumning_paa) - topp) / Dv
-        # Videre inn i stasjonen (retning -u), synkende med 'fall'
-        t_slutt = np.full(vi.size, np.inf)
-        if NA.size:
-            t_inn = straale_segment_t(np.full(vi.size, px), np.full(vi.size, py), -ux, -uy, NA, NB, tmin=1e-3)
-            kryss = np.isfinite(t_inn)
-            z_linje = topp - fall[:, None] * np.where(kryss, t_inn, 0.0)
-            stopper = kryss & (Ntopp[None, :] >= z_linje - 1e-6)
-            t_stopp = np.where(stopper, t_inn, np.inf).min(axis=1)
-            t_ut_av = np.where(kryss, t_inn, -np.inf).max(axis=1)   # forlater stasjonen
-            t_ut_av = np.where(np.isfinite(t_ut_av), t_ut_av, np.inf)
-            t_slutt = np.minimum(t_stopp, t_ut_av)
-        dyb = np.minimum(t_slutt * fall, hoyde)
-        dyb = np.where(np.isfinite(dyb), dyb, hoyde)
         bedre = dyb > beste[vi]
         if bedre.any():
             vb = vi[bedre]
             beste[vb] = dyb[bedre]
-            beste_px[vb] = px
-            beste_py[vb] = py
-            beste_fall[vb] = fall[bedre]
+            b_tx[vb] = tx
+            b_ty[vb] = ty
+            b_tz[vb] = zmin[bedre]
+            # Hvor linjen går inn i stasjonen (ytterste stasjonsvegg den krysser)
+            if NA.size:
+                Dvb = D[vb]
+                t_n = straale_segment_t(np.full(vb.size, tx), np.full(vb.size, ty),
+                                        dx[vb] / Dvb, dy[vb] / Dvb, NA, NB, tmin=0.01)
+                t_n = np.where(np.isfinite(t_n) & (t_n < Dvb[:, None]), t_n, 0.0)
+                b_inn[vb] = t_n.max(axis=1)
+            else:
+                b_inn[vb] = 0.0
         if logg and (ip % 20 == 0 or ip == len(P) - 1):
             logg("    punkt {}/{} langs veggen".format(ip + 1, len(P)))
 
     return {
         "dybde": beste,
-        "px": beste_px,
-        "py": beste_py,
-        "fall": beste_fall,
-        "ser_toppen": synlig_noen,
+        "px": b_tx, "py": b_ty, "pz": b_tz,
+        "inn": b_inn,
         "n_punkter": len(P),
-        "diagnose": {
-            "over_toppen": int(over_toppen.sum()),   # på utsiden og høyere enn toppen
-            "fri_sikt": int(ser_ubeh.sum()),         # ... og ingen hindring i veien
-            "inn_over_veggen": int(synlig_noen.sum()),  # ... og går inn over denne veggen
-            "innsyn": int((beste > 0).sum()),
-        },
         "topp": topp,
-        "hoyde": hoyde,
+        "hoyde": topp - bunn,
+        "diagnose": {
+            "paa_innsiden": int(kandidat.sum()),   # står slik at de kan se innerflaten
+            "ser_kontrollhoyden": int(ser_z.sum()),  # ser flaten i høyden topp - terskel
+            "innsyn": int((beste > float(terskel)).sum()),
+        },
     }
 
 
 def siktlinje(obs, res_vegg, i):
-    """Endepunkter for siktlinjen til observatør i:
-    O (øyepunkt) -> P (på veggtopp) -> T (dypeste punkt inne)."""
-    O = (obs["x"][i], obs["y"][i], obs["z"][i])
-    px, py = res_vegg["px"][i], res_vegg["py"][i]
-    topp = res_vegg["topp"]
-    dyb = res_vegg["dybde"][i]
-    fall = res_vegg["fall"][i]
-    wx, wy = px - O[0], py - O[1]
-    n = math.hypot(wx, wy)
-    wx, wy = wx / n, wy / n
-    lengde = dyb / fall if fall > 0 else 0.0
-    T = (px + wx * lengde, py + wy * lengde, topp - dyb)
-    return O, (px, py, topp), T
+    """Siktlinjen for observatør i: O (øyepunkt) -> E (der linjen går inn i
+    stasjonen, over ytterste stasjonsvegg) -> T (laveste synlige punkt på
+    den valgte veggens innerflate)."""
+    O = (float(obs["x"][i]), float(obs["y"][i]), float(obs["z"][i]))
+    T = (float(res_vegg["px"][i]), float(res_vegg["py"][i]), float(res_vegg["pz"][i]))
+    D = math.hypot(O[0] - T[0], O[1] - T[1])
+    t = float(res_vegg["inn"][i])
+    if D <= 0 or t <= 0:
+        return O, T, T
+    f = t / D
+    E = (T[0] + (O[0] - T[0]) * f, T[1] + (O[1] - T[1]) * f, T[2] + (O[2] - T[2]) * f)
+    return O, E, T
 
 
 def antall_straaler(radius, celle):

@@ -154,19 +154,19 @@ eksempel for å dimensjonere skjerming mot innsyn.
 - **Ingen ekstra installasjon:** bruker de samme pakkene som Lag
   Toposolid (numpy, rasterio, pyproj) og trenger ikke WebView2.
 - **Slik brukes den:** lag toposolid med Lag Toposolid, trykk **Innsyn**,
-  velg toposolidet og stasjonens vegger, og sett øyehøyde, tillatt innsyn
-  under veggtopp og radius (standard 2 km). Bruk samme koordinatsystem og
-  nullpunkt som da toposolidet ble laget.
+  velg toposolidet og **veggene du vil sjekke**, og sett øyehøyde, tillatt
+  innsyn under veggtopp og radius (standard 2 km). Bruk samme
+  koordinatsystem og nullpunkt som da toposolidet ble laget.
+- **Hva den sjekker:** om man utenfra kan se **innerflaten** på de valgte
+  veggene lavere enn tillatt under toppen, typisk over en av de andre
+  veggene i stasjonen. Resten av stasjonen finnes automatisk.
 - **Terreng:** Kartverket DTM1 for hele radiusen, med toposolidet lagt
-  oppå. Høyden justeres automatisk mot toposolidet.
-- **Hver vegg vurderes for seg** mot sin egen topp. Observatører ligger i
-  et rutenett (standard 10 x 10 m) på høyeste punkt i hver celle, pluss
-  øyehøyde.
-- **Resultat:** siktlinjer for de verste observatørene per vegg,
-  innsynskart som fargede ruter i terrenget, rapport i pyRevit-konsollen og
-  CSV ved siden av modellfilen. Ny kjøring sletter forrige resultat.
-- **Begrensninger:** vegetasjon og bygg er ikke med (bart terreng), og
-  åpninger/porter i veggene vurderes ikke.
+  oppå. Alle vegger i området er med som hindringer.
+- **Resultat:** siktlinjer for de verste observatørene per vegg (rød inn
+  til stasjonen, lilla videre til laveste synlige punkt på den valgte
+  veggen), innsynskart i terrenget, rapport i pyRevit-konsollen og CSV.
+- **Begrensninger:** vegetasjon og bygg som ikke er modellert, er ikke med
+  (bart terreng), og åpninger/porter i veggene vurderes ikke.
 
 Full beskrivelse av metode og begrensninger:
 [Siktanalyse.pushbutton/README.md](KartverketToposolid.extension/KartverketToposolid.tab/DTM.panel/Siktanalyse.pushbutton/README.md)
