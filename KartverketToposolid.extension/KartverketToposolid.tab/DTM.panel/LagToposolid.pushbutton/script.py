@@ -787,45 +787,6 @@ _TIDSFIL = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")),
                         "KartverketToposolid", "lag_toposolid_tid.json")
 
 
-def _estimer_revit_tid(n_punkter):
-    """Estimert tid (s) for Toposolid.Create + Commit, ut fra maalt tid per
-    punkt i tidligere kjoeringer. None hvis ingen historikk finnes."""
-    try:
-        with open(_TIDSFIL, "r", encoding="utf-8") as f:
-            d = json.load(f)
-        return max(1.0, d["fast_s"] + d["s_per_punkt"] * n_punkter)
-    except Exception:
-        return None
-
-
-def _estimer_revit_rate():
-    """Sekunder per punkt fra tidligere kjoeringer, eller None."""
-    try:
-        with open(_TIDSFIL, "r", encoding="utf-8") as f:
-            return float(json.load(f)["s_per_punkt"]) or None
-    except Exception:
-        return None
-
-
-def _lagre_revit_tid(n_punkter, sekunder):
-    """Oppdaterer estimatet med glidende snitt (nyeste maaling teller 50 %)."""
-    try:
-        try:
-            with open(_TIDSFIL, "r", encoding="utf-8") as f:
-                d = json.load(f)
-        except Exception:
-            d = None
-        fast = 0.0
-        ny = max(0.0, sekunder - fast) / max(1, n_punkter)
-        if d:
-            ny = 0.5 * d["s_per_punkt"] + 0.5 * ny
-        os.makedirs(os.path.dirname(_TIDSFIL), exist_ok=True)
-        with open(_TIDSFIL, "w", encoding="utf-8") as f:
-            json.dump({"fast_s": fast, "s_per_punkt": ny}, f)
-    except Exception:
-        pass
-
-
 def _beskriv_sammenfoyning(doc, ts):
     """Hvilke elementer Revit automatisk har sammenføyd toposolidet med,
     gruppert per kategori (for feilsøking av treg Commit)."""
@@ -969,7 +930,6 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None):
         t.Commit()
 
         ferdig = 0
-        rate = _estimer_revit_rate()      # s per punkt fra tidligere kjoeringer (eller None)
         t_revit = 0.0
         for k, liste in enumerate(xyz_fliser):
             nk = liste.Count
@@ -978,12 +938,7 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None):
                 tekst = "Flis {} av {} ({:,} punkter)".format(k + 1, n_fliser, nk).replace(",", " ")
             else:
                 tekst = "Revit bygger toposolidet ({:,} punkter)".format(nk).replace(",", " ")
-            meld(3, fra, tekst, segment={
-                "fra": fra, "til": til,
-                "estimat_s": nk * rate if rate else None,
-                "igjen_s": (n_tot - ferdig) * rate if rate else None,
-                "maalt": k > 0,
-            })
+            meld(3, fra, tekst)
             tk = time.time()
             t = Transaction(doc, "Toposolid flis {}".format(k + 1))
             t.Start()
@@ -1009,8 +964,7 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None):
                 raise
             t_revit += time.time() - tk
             ferdig += nk
-            rate = t_revit / float(ferdig)      # maalt i denne kjoeringen
-            meld(3, til, "{} ferdig".format(tekst), segment=None)
+            meld(3, til, "{} ferdig".format(tekst))
         merk("TransactionGroup.Assimilate start")
         tg.Assimilate()
         merk("TransactionGroup.Assimilate ferdig")
@@ -1029,7 +983,6 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None):
                 pass
 
     brukt = time.time() - t0
-    _lagre_revit_tid(n_tot, t_revit)
     _skriv_fremdriftslogg(n_tot, brukt, logg)
     return brukt, n_fliser
 

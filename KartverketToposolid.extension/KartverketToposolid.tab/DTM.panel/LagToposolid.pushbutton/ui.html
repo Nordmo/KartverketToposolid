@@ -516,9 +516,8 @@ async function oppdaterKart(){
 
 // ============================================================
 //  Fremdrift. Steg 1 (nedlasting) og 2 (klargjøring) er målt.
-//  Steg 3 (Revit bygger toposolidet) gir ingen fremdrift fra Revit -
-//  der vises et estimat fra tidligere kjøringer, eller en ubestemt
-//  stripe første gang.
+//  Steg 3 (Revit bygger toposolidet) måles i ferdige fliser. Det vises
+//  ingen tidsestimat - tiden per flis varierer for mye til at det treffer.
 // ============================================================
 const FR_STEG={1:'Henter terreng fra Kartverket',2:'Klargjør punkter for Revit',3:'Revit bygger toposolidet'};
 let frStart=0,frTotalTimer=null,frEstTimer=null;
@@ -545,27 +544,6 @@ function oppdaterFremdrift(d){
   const pros=document.getElementById('fr-prosent');
   document.getElementById('fr-steg').textContent=`Steg ${d.steg} av ${d.antall_steg}: ${FR_STEG[d.steg]||''}`;
   document.getElementById('fr-detalj').textContent=d.detalj||'';
-  if(d.segment){
-    // Revit-steget, flis for flis. 'fra'/'til' er målt (ferdige punkter);
-    // innen en flis animeres linjen med tid per punkt målt i denne kjøringen.
-    if(frEstTimer){clearInterval(frEstTimer);frEstTimer=null;}
-    const sg=d.segment,t0=Date.now();
-    fyll.className='fr-fyll';
-    if(!sg.estimat_s){
-      fyll.style.width=(100*sg.fra).toFixed(1)+'%';
-      pros.textContent=Math.round(100*sg.fra)+' % · måler tiden på første flis …';
-      return;
-    }
-    const tikk=()=>{
-      const s=(Date.now()-t0)/1000;
-      const a=sg.fra+(sg.til-sg.fra)*Math.min(0.97,s/sg.estimat_s);
-      fyll.style.width=(100*a).toFixed(1)+'%';
-      const igjen=Math.max(0,sg.igjen_s-s);
-      pros.textContent=Math.round(100*a)+' % · ca. '+fmtTid(igjen)+' igjen'+(sg.maalt?'':' (fra forrige kjøring)');
-    };
-    tikk();frEstTimer=setInterval(tikk,250);
-    return;
-  }
   if(d.fra_revit){
     // Fremdrift rapportert av Revit selv (Application.ProgressChanged)
     if(d.andel===null || d.andel===undefined || d.steg===3) return;  // bare tekst - behold linjen
@@ -582,20 +560,9 @@ function oppdaterFremdrift(d){
     pros.textContent=Math.round(100*d.andel)+' %';
     return;
   }
-  if(d.estimat_s){
-    // Revit-steget: animer mot estimatet, men aldri over 95 % før Revit er ferdig
-    fyll.className='fr-fyll estimat';
-    const t0=Date.now(),est=d.estimat_s;
-    const tikk=()=>{
-      const s=(Date.now()-t0)/1000;
-      fyll.style.width=(100*Math.min(0.95,s/est)).toFixed(1)+'%';
-      pros.textContent=s<est?`ca. ${fmtTid(est-s)} igjen (estimat)`:'tar lengre tid enn estimert …';
-    };
-    tikk();frEstTimer=setInterval(tikk,250);
-  }else{
-    fyll.className='fr-fyll ubestemt';fyll.style.width='';
-    pros.textContent='første gang: tiden måles nå';
-  }
+  // Ingen målbar fremdrift tilgjengelig: vis en stripe som viser at det jobbes
+  fyll.className='fr-fyll ubestemt';fyll.style.width='';
+  pros.textContent='';
 }
 
 function aapneModal(){
