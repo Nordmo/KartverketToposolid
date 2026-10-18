@@ -620,6 +620,18 @@ def _lagre_revit_tid(n_punkter, sekunder):
         pass
 
 
+def _skriv_fremdriftslogg(n_punkter, sekunder, linjer):
+    """Logger hvilke fremdriftshendelser Revit sendte (for feilsoeking)."""
+    try:
+        sti = os.path.join(os.path.dirname(_TIDSFIL), "revit_fremdrift_logg.txt")
+        with open(sti, "w", encoding="utf-8") as f:
+            f.write("{} punkter, {:.1f} s, {} hendelser fra Revit\n".format(
+                n_punkter, sekunder, len(linjer)))
+            f.write("\n".join(linjer))
+    except Exception:
+        pass
+
+
 def opprett_toposolid(doc, punkter, base_pos, meld=None):
     """Oppretter Toposolid fra punktliste (x, y, z i meter, RELATIVT
     til Project Base Point). Punktene forskyves med Base Point sin
@@ -693,11 +705,45 @@ def opprett_toposolid(doc, punkter, base_pos, meld=None):
         meld(3, None, "Revit bygger toposolidet ({:,} punkter)".format(n).replace(",", " "),
              estimat_s=estimat)
         t0 = time.time()
-        Toposolid.Create(doc, xyz_punkter, toposolid_type_id, level.Id)
-        t.Commit()
+        # Revit sin egen fremdrift: Application.ProgressChanged fyres
+        # synkront (paa hovedtraaden) hver gang Revit oppdaterer sin
+        # fremdriftsindikator - ogsaa midt inne i Toposolid.Create/Commit.
+        # Hendelsene videresendes til vinduet. Handleren maa vaere rask og
+        # faar aldri kaste unntak (det kan ta ned Revit).
+        logg = []
+
+        def on_revit_fremdrift(sender, e):
+            try:
+                lo, hi, pos = e.LowerRange, e.UpperRange, e.Position
+                tekst = (e.Caption or "").strip() or "Revit arbeider"
+                if len(logg) < 500:
+                    logg.append("{:8.2f}s  {:<16} {:>8} / {:<8} {}".format(
+                        time.time() - t0, str(e.Stage), pos, hi, tekst))
+                andel = (pos - lo) / float(hi - lo) if hi > lo else None
+                meld(3, andel, "Revit: {}".format(tekst), fra_revit=True)
+            except Exception:
+                pass
+
+        app = doc.Application
+        abonnert = False
+        try:
+            app.ProgressChanged += on_revit_fremdrift
+            abonnert = True
+        except Exception:
+            pass
+        try:
+            Toposolid.Create(doc, xyz_punkter, toposolid_type_id, level.Id)
+            t.Commit()
+        finally:
+            if abonnert:
+                try:
+                    app.ProgressChanged -= on_revit_fremdrift
+                except Exception:
+                    pass
         brukt = time.time() - t0
         _lagre_revit_tid(n, brukt)
-        return brukt
+        _skriv_fremdriftslogg(n, brukt, logg)
+        return brukt, len(logg)
     except Exception as ex:
         if t.HasStarted() and not t.HasEnded():
             t.RollBack()
@@ -804,13 +850,14 @@ def do_lag_toposolid(doc, base_pos, payload, meld=None):
     t_terreng = time.time() - t_start
 
     t_punkter_start = time.time()
-    t_revit = opprett_toposolid(doc, punkter, base_pos, meld=meld)
-    t_punkter = time.time() - t_punkter_start - (t_revit or 0.0)
+    t_revit, n_revit_hendelser = opprett_toposolid(doc, punkter, base_pos, meld=meld)
+    t_punkter = time.time() - t_punkter_start - t_revit
 
     z_vals = [p[2] for p in punkter]
     resultat = {"antall": len(punkter), "min_z": min(z_vals), "max_z": max(z_vals),
                 "tider": {"terreng": round(t_terreng, 1), "punkter": round(t_punkter, 1),
-                          "revit": round(t_revit or 0.0, 1)}}
+                          "revit": round(t_revit, 1)},
+                "revit_hendelser": n_revit_hendelser}
     if nn54_offset is not None:
         resultat["nn54_offset"] = round(nn54_offset, 4)
     if warning:
@@ -878,11 +925,13 @@ def vis_vindu(doc):
 
     _tilstand = {"opptatt": False, "sist": 0.0}
 
-    def meld_fremdrift(steg, andel, detalj, estimat_s=None):
+    def meld_fremdrift(steg, andel, detalj, estimat_s=None, fra_revit=False):
         """Sender fremdrift til grensesnittet. Begrenset til ca. 10 per
-        sekund, men steg-skifter og estimater sendes alltid."""
+        sekund, men steg-skifter og estimater sendes alltid. Meldinger fra
+        Revit sin ProgressChanged pumper IKKE meldingskoeen (vi er da midt
+        inne i et Revit-kall) - WebView2 tegner i egen prosess uansett."""
         naa = time.time()
-        viktig = estimat_s is not None or andel is None or andel in (0.0, 1.0)
+        viktig = estimat_s is not None or andel in (0.0, 1.0) or (andel is None and not fra_revit)
         if not viktig and naa - _tilstand["sist"] < 0.1:
             return
         _tilstand["sist"] = naa
@@ -890,8 +939,10 @@ def vis_vindu(doc):
             webview.CoreWebView2.PostWebMessageAsString(json.dumps({
                 "type": "fremdrift", "steg": steg, "antall_steg": 3,
                 "andel": andel, "detalj": detalj, "estimat_s": estimat_s,
+                "fra_revit": fra_revit,
             }))
-            _pump_ui()
+            if not fra_revit:
+                _pump_ui()
         except Exception:
             pass  # fremdrift er aldri kritisk
 
