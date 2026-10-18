@@ -179,7 +179,46 @@ def _solider(geom):
                 yield s
 
 
-def toposolid_trekanter(topo):
+def _batch(topo):
+    """Felles merke for toposolider laget i samme kjøring av Lag Toposolid
+    (fliser), hentet fra Kommentarer: 'Kartverket-toposolid <tid> (flis k/n)'."""
+    try:
+        p = topo.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)
+        t = (p.AsString() or "") if p else ""
+    except Exception:
+        t = ""
+    if not t.startswith("Kartverket-toposolid"):
+        return None
+    return t.split(" (flis")[0]
+
+
+def alle_toposolider(doc):
+    try:
+        return list(FilteredElementCollector(doc).OfClass(Toposolid).WhereElementIsNotElementType())
+    except Exception:
+        return [e for e in FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Toposolid)
+                .WhereElementIsNotElementType() if isinstance(e, Toposolid)]
+
+
+def med_sosken(doc, valgte):
+    """Legger til de andre flisene fra samme kjøring av Lag Toposolid."""
+    batcher = set(b for b in (_batch(t) for t in valgte) if b)
+    ut = dict((id_tall(t.Id), t) for t in valgte)
+    if batcher:
+        for t in alle_toposolider(doc):
+            if _batch(t) in batcher:
+                ut[id_tall(t.Id)] = t
+    return list(ut.values())
+
+
+def toposolid_trekanter(toposolider):
+    if not isinstance(toposolider, (list, tuple)):
+        toposolider = [toposolider]
+    deler = [_toposolid_trekanter(t) for t in toposolider]
+    return np.concatenate(deler, axis=0)
+
+
+def _toposolid_trekanter(topo):
     """Triangulerer toposolidets flater (unntatt plane flater som vender
     ned/til siden). Returnerer (T,3,3) i meter, intern."""
     opts = Options()
@@ -347,8 +386,11 @@ def vis_dialog(state):
             pass
     f = lambda navn: w.FindName(navn)
 
-    topo = state.get("topo")
-    linjer = ["Toposolid: {}".format("id {}".format(id_tall(topo.Id)) if topo else "IKKE VALGT"),
+    topo = state.get("topo") or []
+    linjer = ["Toposolid: {}".format(
+                  "IKKE VALGT" if not topo else
+                  "id {}".format(id_tall(topo[0].Id)) if len(topo) == 1 else
+                  "{} fliser fra Lag Toposolid".format(len(topo))),
               "Stasjonsvegger: {}".format(len(state["vegger"]) or "INGEN VALGT"),
               "Ekstra skjerming: {}".format(len(state["skjerm"]))]
     f("txtUtvalg").Text = "\n".join(linjer)
@@ -790,35 +832,36 @@ def main():
         return
     null_e, null_n, bp = hent_base_point(doc)
     state = les_innstillinger()
-    state.update({"null_e": null_e, "null_n": null_n, "topo": None, "vegger": [], "skjerm": []})
+    state.update({"null_e": null_e, "null_n": null_n, "topo": [], "vegger": [], "skjerm": []})
 
-    # Forhåndsvalg: toposolid + vegger merket før knappen ble trykket
+    # Forhåndsvalg: toposolid(er) + vegger merket før knappen ble trykket
     for eid in uidoc.Selection.GetElementIds():
         el = doc.GetElement(eid)
-        if isinstance(el, Toposolid) and state["topo"] is None:
-            state["topo"] = el
+        if isinstance(el, Toposolid):
+            state["topo"].append(el)
         elif isinstance(el, Wall):
             state["vegger"].append(el)
-    if state["topo"] is None:
-        try:
-            alle = list(FilteredElementCollector(doc).OfClass(Toposolid).WhereElementIsNotElementType())
-        except Exception:
-            alle = [e for e in FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Toposolid)
-                    .WhereElementIsNotElementType() if isinstance(e, Toposolid)]
-        if len(alle) == 1:
-            state["topo"] = alle[0]
+    if state["topo"]:
+        state["topo"] = med_sosken(doc, state["topo"])
+    else:
+        # Automatisk: ett toposolid, eller alle fliser fra én kjøring
+        alle = alle_toposolider(doc)
+        batcher = set(_batch(t) for t in alle)
+        if len(alle) == 1 or (len(batcher) == 1 and None not in batcher):
+            state["topo"] = alle
 
     while True:
         handling = vis_dialog(state)
         if handling == "avbryt":
             return
         if handling == "topo":
-            el = plukk(uidoc, "Velg toposolidet", flere=False)
-            if el:
-                if isinstance(el[0], Toposolid):
-                    state["topo"] = el[0]
+            el = plukk(uidoc, "Velg toposolidet (én flis holder - resten fra samme kjøring tas med) og trykk Finish")
+            if el is not None:
+                topo = [e for e in el if isinstance(e, Toposolid)]
+                if topo:
+                    state["topo"] = med_sosken(doc, topo)
                 else:
-                    melding("Elementet er ikke et toposolid.")
+                    melding("Ingen av de valgte elementene er toposolider.")
         elif handling == "vegger":
             el = plukk(uidoc, "Velg stasjonens vegger og trykk Finish (Fullfør)")
             if el is not None:
@@ -837,7 +880,7 @@ def main():
             tolk_tall(state)
             continue
         feil = tolk_tall(state)
-        if state["topo"] is None:
+        if not state["topo"]:
             feil.append("Velg et toposolid.")
         if len(state["vegger"]) < 2:
             feil.append("Velg minst to stasjonsvegger (som danner innhegningen).")

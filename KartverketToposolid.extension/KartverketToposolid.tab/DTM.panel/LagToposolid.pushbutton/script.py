@@ -145,7 +145,7 @@ except Exception as ex:
 try:
     from Autodesk.Revit.DB import (
         FilteredElementCollector, BuiltInCategory, BuiltInParameter,
-        UnitUtils, XYZ, Transaction, ElementId, Level,
+        UnitUtils, XYZ, Transaction, TransactionGroup, ElementId, Level,
     )
 except Exception as ex:
     _feil_og_avslutt("Importere grunnleggende Autodesk.Revit.DB-typer", ex)
@@ -376,7 +376,7 @@ def hent_coverage_navn():
 
 def generer_punkter(epsg_inn, midtpunkt_e, midtpunkt_n, radius, tetthet,
                      nullpunkt_e, nullpunkt_n, relativ_z, vert_offset=0.0,
-                     utsnitt_form="kvadrat", fremdrift=None):
+                     utsnitt_form="kvadrat", fremdrift=None, med_indekser=False):
     """fremdrift(andel 0-1, detaljtekst) kalles under nedlastingen."""
     if er_hpcs(epsg_inn):
         _u34_q = Transformer.from_crs("EPSG:25834", "EPSG:25833", always_xy=True)
@@ -435,6 +435,7 @@ def generer_punkter(epsg_inn, midtpunkt_e, midtpunkt_n, radius, tetthet,
     if utsnitt_form == "sirkel":
         inne = np.hypot(pe - midtpunkt_e, pn - midtpunkt_n) <= radius
         pe, pn, h = pe[inne], pn[inne], h[inne]
+        rr, cc = rr[inne], cc[inne]
 
     if h.size == 0:
         raise Exception("Ingen punkter innenfor valgt utsnitt. Prøv større radius.")
@@ -446,8 +447,39 @@ def generer_punkter(epsg_inn, midtpunkt_e, midtpunkt_n, radius, tetthet,
     z = np.round(h - z_ref + voff, 3)
     punkter = list(zip(x.tolist(), y.tolist(), z.tolist()))
 
+    if med_indekser:
+        return punkter, rr, cc
     return punkter
 
+
+def del_i_fliser(punkter, rr, cc, maks_per_flis):
+    """Deler punktene i rektangulære fliser i nedlastingsrutenettet, med
+    maks ca. maks_per_flis punkter per flis. Nabofliser deler én rad/kolonne
+    med punkter, slik at overflatene møtes nøyaktig i skjøten.
+    Fliser med for få punkter til å danne en flate (kan skje i kanten av
+    en sirkel) hoppes over."""
+    n = len(punkter)
+    if maks_per_flis is None or n <= maks_per_flis:
+        return [punkter]
+    side = max(8, int(math.sqrt(maks_per_flis)))
+    P = np.asarray(punkter, dtype=float)
+    fliser = []
+    for r0 in range(int(rr.min()), int(rr.max()) + 1, side):
+        for c0 in range(int(cc.min()), int(cc.max()) + 1, side):
+            m = (rr >= r0) & (rr <= r0 + side) & (cc >= c0) & (cc <= c0 + side)
+            if m.sum() < 3:
+                continue
+            Q = P[m]
+            xy = Q[:, :2] - Q[:, :2].mean(axis=0)
+            if np.linalg.matrix_rank(xy, tol=1e-6) < 2:
+                continue  # alle punktene på en linje
+            fliser.append([tuple(q) for q in Q.tolist()])
+    return fliser
+
+
+# Ca. antall punkter per toposolid-flis naar fliser er slaatt paa.
+# Faerre punkter gir hyppigere fremdrift, men flere elementer i modellen.
+PUNKTER_PER_FLIS = 60000
 
 # Grense for antall punkter i ett toposolid. Satt for aa unngaa at Revit
 # henger paa enorme punktmengder - juster hvis Revit viser seg aa takle mer.
@@ -601,6 +633,15 @@ def _estimer_revit_tid(n_punkter):
         return None
 
 
+def _estimer_revit_rate():
+    """Sekunder per punkt fra tidligere kjoeringer, eller None."""
+    try:
+        with open(_TIDSFIL, "r", encoding="utf-8") as f:
+            return float(json.load(f)["s_per_punkt"]) or None
+    except Exception:
+        return None
+
+
 def _lagre_revit_tid(n_punkter, sekunder):
     """Oppdaterer estimatet med glidende snitt (nyeste maaling teller 50 %)."""
     try:
@@ -609,7 +650,7 @@ def _lagre_revit_tid(n_punkter, sekunder):
                 d = json.load(f)
         except Exception:
             d = None
-        fast = 1.0
+        fast = 0.0
         ny = max(0.0, sekunder - fast) / max(1, n_punkter)
         if d:
             ny = 0.5 * d["s_per_punkt"] + 0.5 * ny
@@ -632,22 +673,23 @@ def _skriv_fremdriftslogg(n_punkter, sekunder, linjer):
         pass
 
 
-def opprett_toposolid(doc, punkter, base_pos, meld=None):
-    """Oppretter Toposolid fra punktliste (x, y, z i meter, RELATIVT
-    til Project Base Point). Punktene forskyves med Base Point sin
-    egen interne posisjon før de brukes som XYZ, slik at resultatet
-    blir korrekt uansett hvor Revit sitt interne origo ligger i
-    forhold til Base Point.
+def opprett_toposolid(doc, fliser, base_pos, meld=None):
+    """Oppretter ett Toposolid per flis (liste av punktlister, x, y, z i
+    meter RELATIVT til Project Base Point). Med én flis blir det ett
+    toposolid som før.
 
-    !! USIKKERT / MÅ VERIFISERES !!
-    Toposolid.Create sin eksakte signatur er skrevet etter beste
-    kunnskap om Revit 2024-2026 API, men IKKE testet mot en ekte
-    installasjon. Hvis dette feiler:
-      1. Åpne RevitLookup eller Revit API-dokumentasjonen for
-         Autodesk.Revit.DB.Toposolid i din Revit 2026 SDK.
-      2. Sjekk om metoden heter noe annet, tar andre parametre,
-         eller krever en IList<CurveLoop> i tillegg til punktene.
-      3. Juster kallet nedenfor deretter.
+    Hvorfor fliser: Revit gir ingen brukbar fremdrift fra innsiden av
+    Toposolid.Create/Commit. Hver flis lages og lagres i sin egen
+    transaksjon, saa fremdriften er antall punkter i ferdige fliser - maalt,
+    ikke gjettet - og gjenstaaende tid regnes ut fra faktisk tid per punkt
+    i denne kjoeringen. Alle transaksjonene slaas sammen til ett
+    angre-steg (TransactionGroup.Assimilate). Nabofliser deler kantpunkter,
+    saa overflatene moetes noeyaktig.
+
+    Punktene forskyves med Base Point sin interne posisjon, slik at
+    resultatet blir korrekt uansett hvor Revit sitt interne origo ligger.
+    Toposolid.Create(doc, punkter, typeId, levelId) - sjekk signaturen med
+    RevitLookup/SDK hvis en fremtidig Revit-versjon endrer den.
     """
     if not _TOPOSOLID_OK:
         raise Exception(
@@ -659,17 +701,23 @@ def opprett_toposolid(doc, punkter, base_pos, meld=None):
     # Omregningsfaktor hentes én gang (i stedet for tre API-kall per punkt)
     m_til_ft = UnitUtils.ConvertToInternalUnits(1.0, _METER)
     bx, by, bz = base_pos.X, base_pos.Y, base_pos.Z
-    n = len(punkter)
-    hvert = max(1, n // 50)
-    xyz_punkter = List[XYZ]()
-    z_verdier_ft = []
-    for i, (x_rel, y_rel, z_rel) in enumerate(punkter):
-        z_ft = z_rel * m_til_ft + bz
-        xyz_punkter.Add(XYZ(x_rel * m_til_ft + bx, y_rel * m_til_ft + by, z_ft))
-        z_verdier_ft.append(z_ft)
-        if i % hvert == 0:
-            meld(2, i / float(n), "{:,} av {:,} punkter klargjort".format(i, n).replace(",", " "))
-    meld(2, 1.0, "{:,} punkter klargjort".format(n).replace(",", " "))
+    n_tot = sum(len(f) for f in fliser)
+    hvert = max(1, n_tot // 50)
+    xyz_fliser = []
+    z_min_ft = float("inf")
+    i = 0
+    for flis in fliser:
+        liste = List[XYZ]()
+        for (x_rel, y_rel, z_rel) in flis:
+            z_ft = z_rel * m_til_ft + bz
+            liste.Add(XYZ(x_rel * m_til_ft + bx, y_rel * m_til_ft + by, z_ft))
+            if z_ft < z_min_ft:
+                z_min_ft = z_ft
+            i += 1
+            if i % hvert == 0:
+                meld(2, i / float(n_tot), "{:,} av {:,} punkter klargjort".format(i, n_tot).replace(",", " "))
+        xyz_fliser.append(liste)
+    meld(2, 1.0, "{:,} punkter klargjort".format(n_tot).replace(",", " "))
 
     toposolid_type_id = FilteredElementCollector(doc).OfClass(ToposolidType).FirstElementId()
     if toposolid_type_id == ElementId.InvalidElementId:
@@ -677,17 +725,44 @@ def opprett_toposolid(doc, punkter, base_pos, meld=None):
 
     # Toposolid.Create bygger et volum ned til det gitte Level, ikke en
     # tynn skive - vi trenger derfor et Level plassert like under
-    # laveste terrengpunkt (samme virkemaate som nettapp-CSV-importen
-    # ga, ca. 1 m under laveste kote), i stedet for prosjektets
-    # eksisterende laveste niva (som typisk ligger paa kote 0).
+    # laveste terrengpunkt (ca. 1 m under laveste kote), felles for alle
+    # fliser, i stedet for prosjektets laveste niva (typisk kote 0).
     TYKKELSE_UNDER_LAVESTE_M = 1.0
-    z_min_ft = min(z_verdier_ft)
     onsket_niva_ft = z_min_ft - UnitUtils.ConvertToInternalUnits(TYKKELSE_UNDER_LAVESTE_M, _METER)
     TOLERANSE_FT = UnitUtils.ConvertToInternalUnits(0.05, _METER)  # 5 cm
 
-    t = Transaction(doc, "Lag Toposolid fra Kartverket-data")
-    t.Start()
+    # Felles merke i Kommentarer, slik at Innsyn kan finne alle flisene
+    # naar man velger én av dem.
+    batch = "Kartverket-toposolid {}".format(time.strftime("%Y%m%d-%H%M%S"))
+    n_fliser = len(xyz_fliser)
+
+    # Revit sin egen fremdrift logges (for feilsoeking) og teksten vises,
+    # men brukes ikke til linjen - den er for grov (kun "Regenerating 0 %").
+    logg = []
+    t0 = time.time()
+
+    def on_revit_fremdrift(sender, e):
+        try:
+            tekst = (e.Caption or "").strip() or "Revit arbeider"
+            if len(logg) < 500:
+                logg.append("{:8.2f}s  {:<16} {:>8} / {:<8} {}".format(
+                    time.time() - t0, str(e.Stage), e.Position, e.UpperRange, tekst))
+        except Exception:
+            pass
+
+    app = doc.Application
+    abonnert = False
     try:
+        app.ProgressChanged += on_revit_fremdrift
+        abonnert = True
+    except Exception:
+        pass
+
+    tg = TransactionGroup(doc, "Lag Toposolid fra Kartverket-data")
+    tg.Start()
+    try:
+        t = Transaction(doc, "Nivå for toposolid")
+        t.Start()
         level = None
         for lvl in FilteredElementCollector(doc).OfClass(Level):
             if abs(lvl.Elevation - onsket_niva_ft) < TOLERANSE_FT:
@@ -698,59 +773,63 @@ def opprett_toposolid(doc, punkter, base_pos, meld=None):
             onsket_niva_m = UnitUtils.ConvertFromInternalUnits(onsket_niva_ft, _METER)
             basisnavn = "Terreng - Kartverket import (kote {:.2f})".format(onsket_niva_m)
             level.Name = _unikt_levelnavn(doc, basisnavn)
+        t.Commit()
 
-        # Revit gir ingen fremdrift fra Toposolid.Create/Commit. Grensesnittet
-        # viser derfor et estimat basert paa maalt tid fra tidligere kjoeringer.
-        estimat = _estimer_revit_tid(n)
-        meld(3, None, "Revit bygger toposolidet ({:,} punkter)".format(n).replace(",", " "),
-             estimat_s=estimat)
-        t0 = time.time()
-        # Revit sin egen fremdrift: Application.ProgressChanged fyres
-        # synkront (paa hovedtraaden) hver gang Revit oppdaterer sin
-        # fremdriftsindikator - ogsaa midt inne i Toposolid.Create/Commit.
-        # Hendelsene videresendes til vinduet. Handleren maa vaere rask og
-        # faar aldri kaste unntak (det kan ta ned Revit).
-        logg = []
-
-        def on_revit_fremdrift(sender, e):
+        ferdig = 0
+        rate = _estimer_revit_rate()      # s per punkt fra tidligere kjoeringer (eller None)
+        t_revit = 0.0
+        for k, liste in enumerate(xyz_fliser):
+            nk = liste.Count
+            fra, til = ferdig / float(n_tot), (ferdig + nk) / float(n_tot)
+            if n_fliser > 1:
+                tekst = "Flis {} av {} ({:,} punkter)".format(k + 1, n_fliser, nk).replace(",", " ")
+            else:
+                tekst = "Revit bygger toposolidet ({:,} punkter)".format(nk).replace(",", " ")
+            meld(3, fra, tekst, segment={
+                "fra": fra, "til": til,
+                "estimat_s": nk * rate if rate else None,
+                "igjen_s": (n_tot - ferdig) * rate if rate else None,
+                "maalt": k > 0,
+            })
+            tk = time.time()
+            t = Transaction(doc, "Toposolid flis {}".format(k + 1))
+            t.Start()
             try:
-                lo, hi, pos = e.LowerRange, e.UpperRange, e.Position
-                tekst = (e.Caption or "").strip() or "Revit arbeider"
-                if len(logg) < 500:
-                    logg.append("{:8.2f}s  {:<16} {:>8} / {:<8} {}".format(
-                        time.time() - t0, str(e.Stage), pos, hi, tekst))
-                andel = (pos - lo) / float(hi - lo) if hi > lo else None
-                meld(3, andel, "Revit: {}".format(tekst), fra_revit=True)
-            except Exception:
-                pass
-
-        app = doc.Application
-        abonnert = False
-        try:
-            app.ProgressChanged += on_revit_fremdrift
-            abonnert = True
-        except Exception:
-            pass
-        try:
-            Toposolid.Create(doc, xyz_punkter, toposolid_type_id, level.Id)
-            t.Commit()
-        finally:
-            if abonnert:
+                ts = Toposolid.Create(doc, liste, toposolid_type_id, level.Id)
                 try:
-                    app.ProgressChanged -= on_revit_fremdrift
+                    p = ts.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)
+                    if p is not None and not p.IsReadOnly:
+                        p.Set("{} (flis {}/{})".format(batch, k + 1, n_fliser) if n_fliser > 1 else batch)
                 except Exception:
                     pass
-        brukt = time.time() - t0
-        _lagre_revit_tid(n, brukt)
-        _skriv_fremdriftslogg(n, brukt, logg)
-        return brukt, len(logg)
+                t.Commit()
+            except Exception:
+                if t.HasStarted() and not t.HasEnded():
+                    t.RollBack()
+                raise
+            t_revit += time.time() - tk
+            ferdig += nk
+            rate = t_revit / float(ferdig)      # maalt i denne kjoeringen
+            meld(3, til, "{} ferdig".format(tekst), segment=None)
+        tg.Assimilate()
     except Exception as ex:
-        if t.HasStarted() and not t.HasEnded():
-            t.RollBack()
+        if tg.HasStarted() and not tg.HasEnded():
+            tg.RollBack()
         raise Exception(
             "Kunne ikke opprette Toposolid — se kommentar i opprett_toposolid() "
             "i script.py for hva som bør sjekkes. Detalj: {}".format(ex)
         )
+    finally:
+        if abonnert:
+            try:
+                app.ProgressChanged -= on_revit_fremdrift
+            except Exception:
+                pass
+
+    brukt = time.time() - t0
+    _lagre_revit_tid(n_tot, t_revit)
+    _skriv_fremdriftslogg(n_tot, brukt, logg)
+    return brukt, n_fliser
 
 
 # ====================================================================
@@ -846,18 +925,24 @@ def do_lag_toposolid(doc, base_pos, payload, meld=None):
         nullpunkt_e=null_e, nullpunkt_n=null_n, relativ_z=relativ_z,
         vert_offset=vert, utsnitt_form=utsnitt_form,
         fremdrift=lambda andel, detalj: meld(1, andel, detalj),
+        med_indekser=True,
     )
+    punkter, rr, cc = punkter
     t_terreng = time.time() - t_start
 
+    # Del i fliser (ett toposolid per flis) for maalbar fremdrift
+    maks_per_flis = PUNKTER_PER_FLIS if payload.get("fliser", True) else None
+    fliser = del_i_fliser(punkter, rr, cc, maks_per_flis)
+
     t_punkter_start = time.time()
-    t_revit, n_revit_hendelser = opprett_toposolid(doc, punkter, base_pos, meld=meld)
+    t_revit, n_fliser = opprett_toposolid(doc, fliser, base_pos, meld=meld)
     t_punkter = time.time() - t_punkter_start - t_revit
 
     z_vals = [p[2] for p in punkter]
     resultat = {"antall": len(punkter), "min_z": min(z_vals), "max_z": max(z_vals),
                 "tider": {"terreng": round(t_terreng, 1), "punkter": round(t_punkter, 1),
                           "revit": round(t_revit, 1)},
-                "revit_hendelser": n_revit_hendelser}
+                "fliser": n_fliser}
     if nn54_offset is not None:
         resultat["nn54_offset"] = round(nn54_offset, 4)
     if warning:
@@ -925,13 +1010,14 @@ def vis_vindu(doc):
 
     _tilstand = {"opptatt": False, "sist": 0.0}
 
-    def meld_fremdrift(steg, andel, detalj, estimat_s=None, fra_revit=False):
+    def meld_fremdrift(steg, andel, detalj, estimat_s=None, fra_revit=False, segment=None):
         """Sender fremdrift til grensesnittet. Begrenset til ca. 10 per
         sekund, men steg-skifter og estimater sendes alltid. Meldinger fra
         Revit sin ProgressChanged pumper IKKE meldingskoeen (vi er da midt
         inne i et Revit-kall) - WebView2 tegner i egen prosess uansett."""
         naa = time.time()
-        viktig = estimat_s is not None or andel in (0.0, 1.0) or (andel is None and not fra_revit)
+        viktig = (estimat_s is not None or segment is not None or andel in (0.0, 1.0)
+                  or (andel is None and not fra_revit) or steg == 3)
         if not viktig and naa - _tilstand["sist"] < 0.1:
             return
         _tilstand["sist"] = naa
@@ -939,7 +1025,7 @@ def vis_vindu(doc):
             webview.CoreWebView2.PostWebMessageAsString(json.dumps({
                 "type": "fremdrift", "steg": steg, "antall_steg": 3,
                 "andel": andel, "detalj": detalj, "estimat_s": estimat_s,
-                "fra_revit": fra_revit,
+                "fra_revit": fra_revit, "segment": segment,
             }))
             if not fra_revit:
                 _pump_ui()

@@ -262,6 +262,13 @@ på reell feilsøking:
   oppløsning. Store toposolider (f.eks. 2 km radius med 5 m tetthet) går
   derfor fint. Grensen er 1 million punkter per toposolid; blir det flere,
   får du beskjed om hvilken tetthet som holder seg under grensen.
+- **Store toposolider tar lang tid, og Revit viser ingen fremdrift** → med
+  «Del i fliser» (på som standard) lages store terreng som flere
+  toposolider på ca. 60 000 punkter. Fremdriften måles da flis for flis,
+  og gjenstående tid regnes ut fra faktisk tid per punkt. Flisene deler
+  kantpunkter, så terrenget blir sammenhengende, og alt angres med ett
+  steg. Innsyn tar automatisk med alle flisene når du velger én av dem.
+  Slå av bryteren hvis du heller vil ha ett samlet toposolid.
 - **"Name must be unique"** ved gjentatt bruk → skal ikke lenger skje
   (fikset ved å navngi opprettede Level ut fra kote)
 - **PyRevit er installert sentralt av IT til `Program Files`** (vanlig

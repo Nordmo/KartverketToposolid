@@ -177,6 +177,10 @@ __UTM_OPTIONS__
         <span>Relativ Z (laveste punkt = 0)</span>
         <label class="toggle"><input type="checkbox" id="relativ-z"><span class="slider-t"></span></label>
       </div>
+      <div class="toggle-row" style="margin-top:6px" title="Store toposolider deles i flere toposolider på ca. 60 000 punkter. Da kan fremdriften måles flis for flis. Flisene deler kantpunkter, så terrenget blir sammenhengende.">
+        <span>Del i fliser (målbar fremdrift)</span>
+        <label class="toggle"><input type="checkbox" id="fliser" checked><span class="slider-t"></span></label>
+      </div>
     </div>
     <hr class="divider">
     <button id="run-btn" onclick="kjor()">Lag Toposolid</button>
@@ -537,9 +541,30 @@ function oppdaterFremdrift(d){
   const pros=document.getElementById('fr-prosent');
   document.getElementById('fr-steg').textContent=`Steg ${d.steg} av ${d.antall_steg}: ${FR_STEG[d.steg]||''}`;
   document.getElementById('fr-detalj').textContent=d.detalj||'';
+  if(d.segment){
+    // Revit-steget, flis for flis. 'fra'/'til' er målt (ferdige punkter);
+    // innen en flis animeres linjen med tid per punkt målt i denne kjøringen.
+    if(frEstTimer){clearInterval(frEstTimer);frEstTimer=null;}
+    const sg=d.segment,t0=Date.now();
+    fyll.className='fr-fyll';
+    if(!sg.estimat_s){
+      fyll.style.width=(100*sg.fra).toFixed(1)+'%';
+      pros.textContent=Math.round(100*sg.fra)+' % · måler tiden på første flis …';
+      return;
+    }
+    const tikk=()=>{
+      const s=(Date.now()-t0)/1000;
+      const a=sg.fra+(sg.til-sg.fra)*Math.min(0.97,s/sg.estimat_s);
+      fyll.style.width=(100*a).toFixed(1)+'%';
+      const igjen=Math.max(0,sg.igjen_s-s);
+      pros.textContent=Math.round(100*a)+' % · ca. '+fmtTid(igjen)+' igjen'+(sg.maalt?'':' (fra forrige kjøring)');
+    };
+    tikk();frEstTimer=setInterval(tikk,250);
+    return;
+  }
   if(d.fra_revit){
     // Fremdrift rapportert av Revit selv (Application.ProgressChanged)
-    if(d.andel===null || d.andel===undefined) return;  // bare tekst - behold linjen som den er
+    if(d.andel===null || d.andel===undefined || d.steg===3) return;  // bare tekst - behold linjen
     if(frEstTimer){clearInterval(frEstTimer);frEstTimer=null;}
     fyll.className='fr-fyll';
     fyll.style.width=(100*Math.min(1,Math.max(0,d.andel))).toFixed(1)+'%';
@@ -595,7 +620,7 @@ function visResultat(data){
   if(data.tider){
     const t=data.tider;
     html+=`<div class="fr-tider">Tid: terreng ${fmtTid(t.terreng)} · klargjøring ${fmtTid(t.punkter)} · Revit ${fmtTid(t.revit)}`+
-      (typeof data.revit_hendelser==='number'?` · fremdrift fra Revit: ${data.revit_hendelser?data.revit_hendelser+' hendelser':'ingen'}`:'')+`</div>`;
+      (data.fliser>1?` · ${data.fliser} fliser`:'')+`</div>`;
   }
   if(data.warning){
     html+=`<div class="detail-warn">⚠ ${data.warning}</div>`;
@@ -627,6 +652,7 @@ async function kjor(){
     radius:parseFloat(document.getElementById('radius').value),
     tetthet:parseFloat(document.getElementById('tetthet').value),
     relativ_z:document.getElementById('relativ-z').checked,
+    fliser:document.getElementById('fliser').checked,
     utsnitt_form:utsnittForm,
   };
 
