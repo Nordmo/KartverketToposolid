@@ -97,7 +97,7 @@ _INNSTILLINGER = os.path.join(os.environ.get("APPDATA", tempfile.gettempdir()),
                               "KartverketToposolid", "innsyn.json")
 STANDARD = {
     "crs": "NTM23", "radius": 2000.0, "res": 1.0, "celle": 10.0, "oye": 1.6,
-    "avstand": 0.0, "minavst": 0.0, "pktavst": 1.0, "linjer": 5,
+    "avstand": 0.0, "minavst": 0.0, "pktavst": 1.0, "linjer": 5, "sektor": 30.0,
     "krumning": True, "kart": True,
 }
 
@@ -331,7 +331,7 @@ _XAML = u"""
       <Grid.ColumnDefinitions><ColumnDefinition Width="320"/><ColumnDefinition/></Grid.ColumnDefinitions>
       <Grid.RowDefinitions>
         <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
-        <RowDefinition/><RowDefinition/><RowDefinition/>
+        <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
       </Grid.RowDefinitions>
       <TextBlock Grid.Row="0" Text="Øyehøyde over terreng (m)" VerticalAlignment="Center"/>
       <TextBox Grid.Row="0" Grid.Column="1" x:Name="tbOye" Margin="0,2"/>
@@ -349,6 +349,8 @@ _XAML = u"""
       <TextBox Grid.Row="6" Grid.Column="1" x:Name="tbPktAvst" Margin="0,2"/>
       <TextBlock Grid.Row="7" Text="Antall siktlinjer per vegg (verste)" VerticalAlignment="Center"/>
       <TextBox Grid.Row="7" Grid.Column="1" x:Name="tbLinjer" Margin="0,2"/>
+      <TextBlock Grid.Row="8" Text="Min. vinkel mellom siktlinjer (grader)" VerticalAlignment="Center"/>
+      <TextBox Grid.Row="8" Grid.Column="1" x:Name="tbSektor" Margin="0,2"/>
     </Grid>
     <CheckBox x:Name="chkKrumning" Content="Jordkrumning og refraksjon (k = 0,13)" Margin="0,2"/>
     <CheckBox x:Name="chkKart" Content="Lag innsynskart (fargede ruter i terrenget)" Margin="0,2,0,10"/>
@@ -368,7 +370,7 @@ _XAML = u"""
 
 _FELT = [("tbOye", "oye"), ("tbAvstand", "avstand"), ("tbRadius", "radius"),
          ("tbCelle", "celle"), ("tbRes", "res"), ("tbMinAvst", "minavst"),
-         ("tbPktAvst", "pktavst"), ("tbLinjer", "linjer"),
+         ("tbPktAvst", "pktavst"), ("tbLinjer", "linjer"), ("tbSektor", "sektor"),
          ("tbNullE", "null_e"), ("tbNullN", "null_n")]
 
 
@@ -444,11 +446,13 @@ def tolk_tall(state):
         except Exception:
             feil.append("Ugyldig tall i feltet '{}': {}".format(nokkel, tekst))
     regler = [("oye", 0, 100), ("avstand", 0, 50), ("radius", 50, 10000), ("celle", 1, 200),
-              ("res", 0.5, 20), ("minavst", 0, 5000), ("pktavst", 0.1, 20), ("linjer", 0, 100)]
+              ("res", 0.5, 20), ("minavst", 0, 5000), ("pktavst", 0.1, 20), ("linjer", 0, 100),
+              ("sektor", 1, 360)]
     etikett = {"oye": "Øyehøyde", "avstand": "Tillatt innsyn under veggtopp",
                "radius": "Analyseradius", "celle": "Observatørrutenett",
                "res": "Terrengoppløsning", "minavst": "Minsteavstand",
-               "pktavst": "Punktavstand langs veggtopp", "linjer": "Antall siktlinjer"}
+               "pktavst": "Punktavstand langs veggtopp", "linjer": "Antall siktlinjer",
+               "sektor": "Min. vinkel mellom siktlinjer"}
     for n, lo, hi in regler:
         if not (lo <= state[n] <= hi):
             feil.append("{} må være mellom {} og {}.".format(etikett[n], lo, hi))
@@ -750,8 +754,7 @@ def skriv_resultat(doc, state, an):
         n_linjer = 0
         for r in an["res"]:
             v = r["vegg"]
-            kand = np.nonzero(r["dybde"] > terskel)[0]
-            verst = kand[np.argsort(-r["dybde"][kand])][: state["linjer"]]
+            verst = K.velg_siktlinjer(obs, r, terskel, state["linjer"], state.get("sektor", 30.0))
             for i in verst:
                 O, P, T = K.siktlinje(obs, r, i)
                 avst = math.hypot(T[0] - O[0], T[1] - O[1])
@@ -809,6 +812,11 @@ def rapport(doc, state, an, slettet, n_linjer, n_ruter):
     logg("-" * 78)
     logg("Slettet {} elementer fra forrige kjøring. Tegnet {} siktlinjer, {} ruter i innsynskart.".format(
         slettet, n_linjer, n_ruter))
+    logg("Siktlinjer: de som ser lengst ned, minst {:.0f} grader fra hverandre i retning, maks {} per vegg.".format(
+        state.get("sektor", 30.0), state["linjer"]))
+    logg("Innsynskart: rute i hver observatørcelle som ser lenger ned enn {:.2f} m under toppen på minst én "
+         "valgt vegg. Farge = hvor langt ned (verste vegg): gul 0-0,5 m, oransje 0,5-1 m, rød 1-2 m, "
+         "mørkerød over 2 m.".format(terskel))
     for a in an["advarsler"]:
         logg("ADVARSEL: " + a)
 

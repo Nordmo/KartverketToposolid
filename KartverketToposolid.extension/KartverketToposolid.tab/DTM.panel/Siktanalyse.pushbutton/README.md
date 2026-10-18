@@ -55,9 +55,14 @@ innsiden.
   øyepunktet til der linjen går inn over stasjonsveggen (linjestil
   «Innsyn - siktlinje»), og lilla linje videre til det laveste synlige
   punktet **på innerflaten av den valgte veggen** («Innsyn - inn i stasjon»).
+  Den som ser lengst ned velges først, deretter den neste verste som ligger
+  minst «Min. vinkel mellom siktlinjer» (standard 30°) fra de allerede
+  valgte, sett fra veggen. Slik spres linjene på ulike retninger.
   Kommentarfeltet på linjene har vegg, dybde, avstand og koordinater.
 - **Innsynskart:** fargede ruter på terrenget (DirectShape, Generic Models)
-  der det er innsyn, gradert etter dybde: 0-0,5 / 0,5-1 / 1-2 / over 2 m.
+  i hver observatørcelle som ser lenger ned enn tillatt på minst én valgt
+  vegg. Fargen viser hvor langt under toppen cellen ser (verste vegg):
+  gul 0-0,5 m, oransje 0,5-1 m, rød 1-2 m, mørkerød over 2 m.
   Fargene vises i skyggelagt visning.
 - **Rapport** i pyRevit-konsollen og **CSV** (semikolon, desimalkomma) ved
   siden av modellfilen.

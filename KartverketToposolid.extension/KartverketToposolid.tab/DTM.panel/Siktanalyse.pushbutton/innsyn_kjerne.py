@@ -716,6 +716,30 @@ def siktlinje(obs, res_vegg, i):
     return O, E, T
 
 
+def velg_siktlinjer(obs, res_vegg, terskel, maks_antall, sektor_grader=30.0):
+    """Velger hvilke observatører som får tegnet siktlinje for en vegg.
+    Den som ser lengst ned på veggen velges først. Deretter velges den neste
+    verste som ligger minst 'sektor_grader' fra alle som allerede er valgt
+    (retning sett fra veggen), osv. Da spres linjene rundt i stedet for å
+    klumpe seg på samme høydedrag - også når to nesten like retninger ville
+    havnet på hver sin side av en fast sektorgrense."""
+    d = res_vegg["dybde"]
+    kand = np.nonzero(d > terskel)[0]
+    if kand.size == 0 or maks_antall <= 0:
+        return np.array([], dtype=np.int64)
+    kand = kand[np.argsort(-d[kand], kind="stable")]
+    az = np.degrees(np.arctan2(obs["y"][kand] - res_vegg["py"][kand],
+                               obs["x"][kand] - res_vegg["px"][kand])) % 360.0
+    valgt, valgt_az = [], []
+    for i, a in zip(kand, az):
+        if all(min(abs(a - b), 360.0 - abs(a - b)) >= sektor_grader for b in valgt_az):
+            valgt.append(i)
+            valgt_az.append(a)
+            if len(valgt) >= maks_antall:
+                break
+    return np.array(valgt, dtype=np.int64)
+
+
 def antall_straaler(radius, celle):
     """Så mange straaler at sideavviket ved ytterkanten er <= celle/4."""
     return int(max(720, math.ceil(2.0 * math.pi * radius / (celle / 2.0))))
