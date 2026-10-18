@@ -551,15 +551,27 @@ def kjor_analyse(doc, state, bp):
 
     hull = K.konveks_hull(np.vstack([v["polyline"] for v in nettvegger]))
     senter = hull.mean(axis=0)
-    rn = K.Rutenett.rundt(senter[0], senter[1], R + 100.0, res)
-    logg("Analyseområde: radius {:.0f} m, rutenett {} x {} ({:.1f} mill. celler)".format(
-        R, rn.nrad, rn.nkol, rn.nrad * rn.nkol / 1e6))
 
     logg("Leser toposolid ...")
     t = time.time()
     tri = toposolid_trekanter(state["topo"])
-    Ztopo = K.rasteriser_i_utsnitt(rn, tri)
     logg("  {} trekanter, {:.1f} s".format(len(tri), time.time() - t))
+
+    # Observatører bare der toposolidet finnes: radius begrenses til
+    # toposolidets utstrekning fra stasjonen, så vi ikke henter og regner
+    # på terreng som uansett ikke får observatører.
+    tx_, ty_ = tri[:, :, 0], tri[:, :, 1]
+    topo_utstrekning = max(abs(tx_.max() - senter[0]), abs(tx_.min() - senter[0]),
+                           abs(ty_.max() - senter[1]), abs(ty_.min() - senter[1]))
+    R_eff = min(R, topo_utstrekning * math.sqrt(2.0))
+    if R_eff < R:
+        logg("Toposolidet når ca. {:.0f} m fra stasjonen - analyseradius begrenset fra {:.0f} til "
+             "{:.0f} m.".format(topo_utstrekning, R, R_eff))
+    R = R_eff
+    rn = K.Rutenett.rundt(senter[0], senter[1], min(R, topo_utstrekning) + 100.0, res)
+    logg("Analyseområde: radius {:.0f} m, rutenett {} x {} ({:.1f} mill. celler)".format(
+        R, rn.nrad, rn.nkol, rn.nrad * rn.nkol / 1e6))
+    Ztopo = K.rasteriser_i_utsnitt(rn, tri)
 
     logg("Henter terreng fra Kartverket ({}) ...".format(state["crs"]))
     epsg = dict((k, e) for k, e, _ in D.KOORDINATSYSTEMER)[state["crs"]]
@@ -583,11 +595,15 @@ def kjor_analyse(doc, state, bp):
     elif mad > 0.3:
         advarsler.append("Toposolid og DTM avviker en del (MAD {:.2f} m) - sjekk at "
                          "toposolidet er laget med samme koordinater.".format(mad))
+    har_topo = np.isfinite(Ztopo)
     del Ztopo, Zdtm
 
-    obs = K.lag_observatorer(rn, H, gyldig, celle, senter, R, hull,
+    # Observatører kun på toposolidet. Kartverket-terreng brukes fortsatt
+    # som hindring (f.eks. i hullet under stasjonen og langs kanten).
+    obs = K.lag_observatorer(rn, H, gyldig & har_topo, celle, senter, R, hull,
                              state["minavst"], state["oye"])
-    logg("Observatørpunkter: {}".format(obs["x"].size))
+    del har_topo
+    logg("Observatørpunkter: {} (kun celler på toposolidet)".format(obs["x"].size))
 
     A, B, T, E = [], [], [], []
     for v in alle_vegger:

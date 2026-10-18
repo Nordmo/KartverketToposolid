@@ -33,9 +33,10 @@ innsiden.
   dem (felles hjørne eller T-kobling). Innsiden av en valgt vegg er den
   siden som er omsluttet av stasjonen. Fundament- og vangvegger i samme
   linje som veggen regnes som del av den.
-- **Observatører:** rutenett (standard 10 x 10 m) innenfor radius. I hver
-  celle brukes det høyeste terrengpunktet pluss øyehøyde. Celler inne i
-  stasjonen fjernes.
+- **Observatører:** rutenett (standard 10 x 10 m) innenfor radius, men
+  **bare der toposolidet finnes**. Når radius er større enn toposolidet,
+  begrenses analysen til toposolidet. I hver celle brukes det høyeste
+  punktet på toposolidet pluss øyehøyde. Celler inne i stasjonen fjernes.
 - **Terreng:** Kartverket DTM1 for hele radiusen, med toposolidet lagt
   oppå. DTM-høyden justeres automatisk mot toposolidet.
 - **Hindringer:** terreng, alle vegger i modellen innenfor radius (også de
