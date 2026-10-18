@@ -661,6 +661,23 @@ def _lagre_revit_tid(n_punkter, sekunder):
         pass
 
 
+def _beskriv_sammenfoyning(doc, ts):
+    """Hvilke elementer Revit automatisk har sammenføyd toposolidet med,
+    gruppert per kategori (for feilsøking av treg Commit)."""
+    try:
+        from Autodesk.Revit.DB import JoinGeometryUtils
+        ids = list(JoinGeometryUtils.GetJoinedElements(doc, ts))
+        teller = {}
+        for eid in ids:
+            el = doc.GetElement(eid)
+            navn = el.Category.Name if el is not None and el.Category is not None else "ukjent"
+            teller[navn] = teller.get(navn, 0) + 1
+        deler = ", ".join("{} {}".format(v, k) for k, v in sorted(teller.items(), key=lambda kv: -kv[1]))
+        return "sammenføyd med {} elementer{}".format(len(ids), ": " + deler if deler else "")
+    except Exception as ex:
+        return "kunne ikke lese sammenføyninger ({})".format(ex)
+
+
 def _skriv_fremdriftslogg(n_punkter, sekunder, linjer):
     """Logger hvilke fremdriftshendelser Revit sendte (for feilsoeking)."""
     try:
@@ -820,6 +837,7 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None):
                 tc = time.time()
                 t.Commit()
                 merk("flis {}/{}: Commit ferdig etter {:.1f} s".format(k + 1, n_fliser, time.time() - tc))
+                merk("flis {}/{}: {}".format(k + 1, n_fliser, _beskriv_sammenfoyning(doc, ts)))
             except Exception:
                 if t.HasStarted() and not t.HasEnded():
                     t.RollBack()
