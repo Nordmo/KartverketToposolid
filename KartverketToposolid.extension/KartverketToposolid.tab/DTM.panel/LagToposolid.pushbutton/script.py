@@ -452,154 +452,6 @@ def generer_punkter(epsg_inn, midtpunkt_e, midtpunkt_n, radius, tetthet,
     return punkter
 
 
-def del_i_fliser(punkter, rr, cc, maks_per_flis, utelat_rekt=None):
-    """Deler punktene i rektangulære fliser i nedlastingsrutenettet, med
-    maks ca. maks_per_flis punkter per flis (None = én flis). Nabofliser
-    deler én rad/kolonne med punkter, slik at overflatene møtes nøyaktig.
-
-    utelat_rekt: liste med (r0, r1, c0, c1) i rutenettet som skal stå uten
-    terreng (under modellerte elementer). Revit lager toposolidets omriss
-    som det konvekse omrisset av punktene, så et hull kan ikke lages ved
-    bare å fjerne punkter. I stedet kuttes flisene langs kantene av
-    rektanglene, og rektanglene selv utelates - da er hver flis fortsatt
-    konveks og dekker ikke hullet.
-
-    Fliser med for få punkter til å danne en flate hoppes over."""
-    utelat_rekt = list(utelat_rekt or [])
-    n = len(punkter)
-    if (maks_per_flis is None or n <= maks_per_flis) and not utelat_rekt:
-        return [punkter]
-    side = max(8, int(math.sqrt(maks_per_flis))) if maks_per_flis else None
-    P = np.asarray(punkter, dtype=float)
-    r_lo, r_hi = int(rr.min()), int(rr.max())
-    c_lo, c_hi = int(cc.min()), int(cc.max())
-
-    def kanter(lo, hi):
-        # Like store fliser: del spennet i n like deler i stedet for faste skritt.
-        if side is None:
-            return [lo, hi]
-        spenn = hi - lo
-        n_deler = max(1, int(math.ceil(spenn / float(side))))
-        return [lo + int(round(i * spenn / float(n_deler))) for i in range(n_deler + 1)]
-
-    rk = set(kanter(r_lo, r_hi))
-    ck = set(kanter(c_lo, c_hi))
-    for (r0, r1, c0, c1) in utelat_rekt:
-        rk.update([r0, r1])
-        ck.update([c0, c1])
-    rk = sorted(x for x in rk if r_lo <= x <= r_hi)
-    ck = sorted(x for x in ck if c_lo <= x <= c_hi)
-
-    def utelatt(ra, rb, ca, cb):
-        return any(r0 <= ra and rb <= r1 and c0 <= ca and cb <= c1 for (r0, r1, c0, c1) in utelat_rekt)
-
-    # Punkter strengt inne i et rektangel brukes aldri
-    inne = np.zeros(len(rr), dtype=bool)
-    for (r0, r1, c0, c1) in utelat_rekt:
-        inne |= (rr > r0) & (rr < r1) & (cc > c0) & (cc < c1)
-
-    celler = []
-    for ra, rb in zip(rk[:-1], rk[1:]):
-        # Slå sammen nabo-celler i samme rad (så lenge de ikke er utelatt og
-        # flisen ikke blir bredere enn 'side'), for å unngå mange smale fliser
-        start = None
-        for ca, cb in zip(ck[:-1], ck[1:]):
-            if utelatt(ra, rb, ca, cb):
-                if start is not None:
-                    celler.append((ra, rb, start, ca))
-                    start = None
-                continue
-            if start is None:
-                start = ca
-            elif side is not None and cb - start > side:
-                celler.append((ra, rb, start, ca))
-                start = ca
-        if start is not None:
-            celler.append((ra, rb, start, ck[-1]))
-
-    fliser = []
-    for (r0, r1, c0, c1) in celler:
-        m = (rr >= r0) & (rr <= r1) & (cc >= c0) & (cc <= c1) & ~inne
-        if m.sum() < 3:
-            continue
-        Q = P[m]
-        xy = Q[:, :2] - Q[:, :2].mean(axis=0)
-        if np.linalg.matrix_rank(xy, tol=1e-6) < 2:
-            continue  # alle punktene på en linje
-        fliser.append([tuple(q) for q in Q.tolist()])
-    return fliser
-
-
-def punkter_under_elementer(P, elementer, hoyde_margin=0.3):
-    """For hvert element: indeksene til punktene (x, y, z relativt til
-    nullpunkt, meter) som ligger innenfor elementets fotavtrykk OG der
-    terrenget er høyere enn elementets underkant (dvs. toposolidet ville
-    overlappet elementet). Elementer over terrenget gir ingen punkter.
-    elementer: {"type": "linje", "pts": [(x, y), ...], "halv": m, "bunn": z}
-               {"type": "boks", "x0", "y0", "x1", "y1", "bunn": z}"""
-    P = np.asarray(P, dtype=float)
-    x, y, z = P[:, 0], P[:, 1], P[:, 2]
-    ut = []
-    for e in elementer:
-        if e["type"] == "boks":
-            m = (x >= e["x0"]) & (x <= e["x1"]) & (y >= e["y0"]) & (y <= e["y1"])
-        else:
-            pts = np.asarray(e["pts"], dtype=float)
-            h = float(e["halv"])
-            lo = pts.min(axis=0) - h
-            hi = pts.max(axis=0) + h
-            kand = np.nonzero((x >= lo[0]) & (x <= hi[0]) & (y >= lo[1]) & (y <= hi[1]))[0]
-            m = np.zeros(len(x), dtype=bool)
-            if kand.size:
-                px, py = x[kand], y[kand]
-                treff = np.zeros(kand.size, dtype=bool)
-                for a, b in zip(pts[:-1], pts[1:]):
-                    e_ = b - a
-                    L2 = max(float(e_ @ e_), 1e-12)
-                    t = np.clip(((px - a[0]) * e_[0] + (py - a[1]) * e_[1]) / L2, 0.0, 1.0)
-                    d = np.hypot(px - (a[0] + t * e_[0]), py - (a[1] + t * e_[1]))
-                    treff |= d <= h
-                m[kand] = treff
-        m &= z > float(e["bunn"]) - hoyde_margin
-        idx = np.nonzero(m)[0]
-        if idx.size:
-            ut.append(idx)
-    return ut
-
-
-def rektangler_fra_indekser(rr, cc, indekslister, utvid=1, avstand=2):
-    """Ett rektangel (r0, r1, c0, c1) per element, utvidet med 'utvid'
-    piksler slik at kantradene ikke selv ligger under elementet. Rektangler
-    som overlapper eller ligger nærmere enn 'avstand' piksler slås sammen."""
-    rekt = []
-    for idx in indekslister:
-        rekt.append([int(rr[idx].min()) - utvid, int(rr[idx].max()) + utvid,
-                     int(cc[idx].min()) - utvid, int(cc[idx].max()) + utvid])
-    endret = True
-    while endret:
-        endret = False
-        ut = []
-        while rekt:
-            a = rekt.pop()
-            i = 0
-            while i < len(rekt):
-                b = rekt[i]
-                if (a[0] <= b[1] + avstand and b[0] <= a[1] + avstand and
-                        a[2] <= b[3] + avstand and b[2] <= a[3] + avstand):
-                    a = [min(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), max(a[3], b[3])]
-                    rekt.pop(i)
-                    endret = True
-                else:
-                    i += 1
-            ut.append(a)
-        rekt = ut
-    return [tuple(r) for r in rekt]
-
-
-# Ca. antall punkter per toposolid-flis naar fliser er slaatt paa.
-# Faerre punkter gir hyppigere fremdrift, men flere elementer i modellen.
-PUNKTER_PER_FLIS = 60000
-
 # Grense for antall punkter i ett toposolid. Satt for aa unngaa at Revit
 # henger paa enorme punktmengder - juster hvis Revit viser seg aa takle mer.
 MAKS_PUNKTER = 1000000
@@ -725,52 +577,6 @@ def hent_base_point(doc):
     return e_m, n_m, pos
 
 
-# Kategorier som Revit sammenføyer/skjærer toposolidet mot. Elementer i
-# disse som stikker ned i terrenget, får et hull i toposolidet under seg.
-_ELEMENT_KATEGORIER = [
-    "OST_Walls", "OST_Floors", "OST_StructuralFoundation", "OST_StructuralColumns",
-    "OST_Columns", "OST_StructuralFraming", "OST_GenericModel", "OST_Roofs",
-    "OST_Stairs", "OST_Ramps",
-]
-
-
-def hent_elementfotavtrykk(doc, base_pos, margin):
-    """Fotavtrykk (relativt til nullpunkt, meter) og underkant for modellerte
-    elementer som kan overlappe toposolidet. Vegger brukes med senterlinje
-    og full bredde + margin (dekker alle lokasjonslinjer); andre elementer
-    med bounding box + margin. Innsyn-resultater (DirectShape) hoppes over."""
-    from Autodesk.Revit.DB import ElementMulticategoryFilter, LocationCurve, Wall, DirectShape
-    FT = 0.3048
-    bx, by, bz = base_pos.X, base_pos.Y, base_pos.Z
-    kat = List[BuiltInCategory]()
-    for navn in _ELEMENT_KATEGORIER:
-        try:
-            kat.Add(getattr(BuiltInCategory, navn))
-        except Exception:
-            pass
-    ut = []
-    for el in (FilteredElementCollector(doc).WherePasses(ElementMulticategoryFilter(kat))
-               .WhereElementIsNotElementType()):
-        try:
-            if isinstance(el, DirectShape) and (el.ApplicationId or "").startswith("KartverketToposolid"):
-                continue
-            bb = el.get_BoundingBox(None)
-            if bb is None:
-                continue
-            bunn = (bb.Min.Z - bz) * FT
-            loc = el.Location
-            if isinstance(el, Wall) and isinstance(loc, LocationCurve):
-                pts = [((p.X - bx) * FT, (p.Y - by) * FT) for p in loc.Curve.Tessellate()]
-                ut.append({"type": "linje", "pts": pts, "halv": el.Width * FT + margin, "bunn": bunn})
-            else:
-                ut.append({"type": "boks", "bunn": bunn,
-                           "x0": (bb.Min.X - bx) * FT - margin, "x1": (bb.Max.X - bx) * FT + margin,
-                           "y0": (bb.Min.Y - by) * FT - margin, "y1": (bb.Max.Y - by) * FT + margin})
-        except Exception:
-            continue
-    return ut
-
-
 def _unikt_levelnavn(doc, basisnavn):
     """Garanterer et unikt Level-navn - Revit tillater ikke to nivaaer
     med identisk navn. Legger paa (2), (3) osv. ved kollisjon."""
@@ -837,46 +643,13 @@ def _skriv_fremdriftslogg(n_punkter, sekunder, linjer):
         pass
 
 
-def _er_kartverket_toposolid(t):
-    try:
-        p = t.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)
-        return bool(p and (p.AsString() or "").startswith("Kartverket-toposolid"))
-    except Exception:
-        return False
-
-
-def overlappende_toposolider(doc, fliser, base_pos):
-    """Eksisterende toposolider som overlapper området (bounding box i plan).
-    Revit sammenføyer nye toposolider med overlappende toposolider, og med
-    store toposolider kan det ta mange minutter per flis."""
-    FT = 0.3048
-    P = np.asarray([p for f in fliser for p in f], dtype=float)
-    x0 = P[:, 0].min() / FT + base_pos.X
-    x1 = P[:, 0].max() / FT + base_pos.X
-    y0 = P[:, 1].min() / FT + base_pos.Y
-    y1 = P[:, 1].max() / FT + base_pos.Y
-    ut = []
-    for t in FilteredElementCollector(doc).OfClass(Toposolid).WhereElementIsNotElementType():
-        bb = t.get_BoundingBox(None)
-        if bb is None:
-            continue
-        if bb.Max.X >= x0 and bb.Min.X <= x1 and bb.Max.Y >= y0 and bb.Min.Y <= y1:
-            ut.append(t)
-    return ut
-
-
-def opprett_toposolid(doc, fliser, base_pos, meld=None, slett=None):
-    """Oppretter ett Toposolid per flis (liste av punktlister, x, y, z i
-    meter RELATIVT til Project Base Point). Med én flis blir det ett
-    toposolid som før.
-
-    Hvorfor fliser: Revit gir ingen brukbar fremdrift fra innsiden av
-    Toposolid.Create/Commit. Hver flis lages og lagres i sin egen
-    transaksjon, saa fremdriften er antall punkter i ferdige fliser - maalt,
-    ikke gjettet - og gjenstaaende tid regnes ut fra faktisk tid per punkt
-    i denne kjoeringen. Alle transaksjonene slaas sammen til ett
-    angre-steg (TransactionGroup.Assimilate). Nabofliser deler kantpunkter,
-    saa overflatene moetes noeyaktig.
+def opprett_toposolid(doc, fliser, base_pos, meld=None):
+    """Oppretter toposolid fra punktlister (x, y, z i meter RELATIVT til
+    Project Base Point). Knappen sender én liste = ett samlet toposolid.
+    Hver liste lages i egen transaksjon inne i en TransactionGroup (ett
+    angre-steg). Revit sine fremdriftshendelser, meldinger (advarsler/feil)
+    og tidsmerker for Create/Commit skrives løpende til
+    %APPDATA%\\KartverketToposolid\\revit_fremdrift_logg.txt.
 
     Punktene forskyves med Base Point sin interne posisjon, slik at
     resultatet blir korrekt uansett hvor Revit sitt interne origo ligger.
@@ -1015,16 +788,6 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None, slett=None):
     tg = TransactionGroup(doc, "Lag Toposolid fra Kartverket-data")
     tg.Start()
     try:
-        if slett:
-            t = Transaction(doc, "Slett gamle toposolider i området")
-            t.Start()
-            ids = List[ElementId]()
-            for el in slett:
-                ids.Add(el.Id)
-            doc.Delete(ids)
-            t.Commit()
-            merk("slettet {} gamle toposolider i området".format(ids.Count))
-
         t = Transaction(doc, "Nivå for toposolid")
         t.Start()
         level = None
@@ -1048,7 +811,7 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None, slett=None):
                 tekst = "Flis {} av {} ({:,} punkter)".format(k + 1, n_fliser, nk).replace(",", " ")
             else:
                 tekst = "Revit bygger toposolidet ({:,} punkter)".format(nk).replace(",", " ")
-            meld(3, fra, tekst)
+            meld(3, fra if n_fliser > 1 else None, tekst)
             tk = time.time()
             t = Transaction(doc, "Toposolid flis {}".format(k + 1))
             t.Start()
@@ -1202,59 +965,19 @@ def do_lag_toposolid(doc, base_pos, payload, meld=None):
         nullpunkt_e=null_e, nullpunkt_n=null_n, relativ_z=relativ_z,
         vert_offset=vert, utsnitt_form=utsnitt_form,
         fremdrift=lambda andel, detalj: meld(1, andel, detalj),
-        med_indekser=True,
     )
-    punkter, rr, cc = punkter
     t_terreng = time.time() - t_start
 
-    # Hull under modellerte elementer som stikker ned i terrenget, slik at
-    # Revit ikke bruker minutter på å skjære/sammenføye toposolidet mot dem.
-    utelat_rekt = []
-    n_utelatt = 0
-    n_elementer = 0
-    if payload.get("utelat_elementer", True):
-        margin = max(1.0, float(tetthet))
-        elementer = hent_elementfotavtrykk(doc, base_pos, margin)
-        indekser = punkter_under_elementer(punkter, elementer)
-        n_elementer = len(indekser)
-        if indekser:
-            utelat_rekt = rektangler_fra_indekser(rr, cc, indekser)
-
-    # Del i fliser (ett toposolid per flis) for maalbar fremdrift
-    maks_per_flis = PUNKTER_PER_FLIS if payload.get("fliser", True) else None
-    fliser = del_i_fliser(punkter, rr, cc, maks_per_flis, utelat_rekt=utelat_rekt)
-    if utelat_rekt:
-        n_utelatt = len(punkter) - len(set(p for f in fliser for p in f))
-
     t_punkter_start = time.time()
-    # Gamle toposolider i samme område gjør at Revit sammenføyer det nye
-    # terrenget med dem, noe som kan ta mange minutter per flis. Spør om de
-    # skal slettes (kan angres med Ctrl+Z, sammen med det nye terrenget).
-    slett = []
-    gamle = overlappende_toposolider(doc, fliser, base_pos)
-    if gamle:
-        egne = sum(1 for t in gamle if _er_kartverket_toposolid(t))
-        svar = MessageBox.Show(
-            "Det finnes {} toposolid(er) i dette området fra før ({} laget av Lag Toposolid).\n\n"
-            "Revit sammenføyer det nye terrenget med overlappende toposolider, og det kan ta "
-            "mange minutter per flis.\n\n"
-            "Ja = slett de gamle og lag nytt (kan angres med Ctrl+Z)\n"
-            "Nei = behold dem og lag nytt likevel (kan bli tregt)\n"
-            "Avbryt = ikke lag noe".format(len(gamle), egne),
-            "Overlappende toposolider", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning)
-        if svar == MessageBoxResult.Cancel:
-            raise Exception("Avbrutt - ingenting er endret.")
-        if svar == MessageBoxResult.Yes:
-            slett = gamle
-    t_revit, n_fliser = opprett_toposolid(doc, fliser, base_pos, meld=meld, slett=slett)
+    # Ett samlet toposolid (som i den opprinnelige versjonen)
+    t_revit, _ = opprett_toposolid(doc, [punkter], base_pos, meld=meld)
     t_punkter = time.time() - t_punkter_start - t_revit
 
     z_vals = [p[2] for p in punkter]
     resultat = {"antall": len(punkter), "min_z": min(z_vals), "max_z": max(z_vals),
                 "tider": {"terreng": round(t_terreng, 1), "punkter": round(t_punkter, 1),
                           "revit": round(t_revit, 1)},
-                "fliser": n_fliser,
-                "utelatt": {"punkter": n_utelatt, "elementer": n_elementer, "hull": len(utelat_rekt)}}
+}
     if nn54_offset is not None:
         resultat["nn54_offset"] = round(nn54_offset, 4)
     if warning:

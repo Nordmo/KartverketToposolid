@@ -262,21 +262,12 @@ på reell feilsøking:
   oppløsning. Store toposolider (f.eks. 2 km radius med 5 m tetthet) går
   derfor fint. Grensen er 1 million punkter per toposolid; blir det flere,
   får du beskjed om hvilken tetthet som holder seg under grensen.
-- **Store toposolider tar lang tid, og Revit viser ingen fremdrift** → med
-  «Del i fliser» (på som standard) lages store terreng som flere
-  toposolider på ca. 60 000 punkter. Fremdriften måles da flis for flis,
-  og gjenstående tid regnes ut fra faktisk tid per punkt. Flisene deler
-  kantpunkter, så terrenget blir sammenhengende, og alt angres med ett
-  steg. Innsyn tar automatisk med alle flisene når du velger én av dem.
-  Slå av bryteren hvis du heller vil ha ett samlet toposolid.
-- **Commit tar mange minutter når toposolidet ligger under bygg/stasjon** →
-  Revit skjærer og sammenføyer toposolidet automatisk mot vegger, dekker og
-  fundamenter som stikker ned i terrenget, og det kan ta 10 minutter for én
-  flis. Med «Utelat terreng under modellerte elementer» (på som standard)
-  lages det et hull i toposolidet under slike elementer (fotavtrykk + 1 m,
-  eller punkttettheten om den er større), så det ikke er noe å skjære.
-  Elementer som står over terrenget, gir ikke hull. Innsyn bruker
-  Kartverket-terreng i hullet.
+- **Revit bruker lang tid / «Not Responding» når toposolidet lagres** →
+  la det stå. Windows merker Revit som «Not Responding» når det er opptatt
+  i mer enn 5 sekunder. Henger det i mange minutter, trykk Alt+Tab og se
+  etter en Revit-dialog bak vinduet, og se i
+  `%APPDATA%\KartverketToposolid\revit_fremdrift_logg.txt`, som skrives
+  løpende og viser hva Revit gjør og eventuelle feilmeldinger.
 - **"Name must be unique"** ved gjentatt bruk → skal ikke lenger skje
   (fikset ved å navngi opprettede Level ut fra kote)
 - **PyRevit er installert sentralt av IT til `Program Files`** (vanlig

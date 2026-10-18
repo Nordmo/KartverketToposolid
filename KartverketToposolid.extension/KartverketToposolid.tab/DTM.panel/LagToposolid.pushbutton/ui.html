@@ -177,14 +177,7 @@ __UTM_OPTIONS__
         <span>Relativ Z (laveste punkt = 0)</span>
         <label class="toggle"><input type="checkbox" id="relativ-z"><span class="slider-t"></span></label>
       </div>
-      <div class="toggle-row" style="margin-top:6px" title="Store toposolider deles i flere toposolider på ca. 60 000 punkter. Da kan fremdriften måles flis for flis. Flisene deler kantpunkter, så terrenget blir sammenhengende.">
-        <span>Del i fliser (målbar fremdrift)</span>
-        <label class="toggle"><input type="checkbox" id="fliser" checked><span class="slider-t"></span></label>
-      </div>
-      <div class="toggle-row" style="margin-top:6px" title="Lager hull i toposolidet under vegger, dekker, fundamenter o.l. som stikker ned i terrenget. Da slipper Revit å skjære toposolidet mot dem, noe som kan ta mange minutter.">
-        <span>Utelat terreng under modellerte elementer</span>
-        <label class="toggle"><input type="checkbox" id="utelat-elementer" checked><span class="slider-t"></span></label>
-      </div>
+    </div>
     </div>
     <hr class="divider">
     <button id="run-btn" onclick="kjor()">Lag Toposolid</button>
@@ -516,8 +509,8 @@ async function oppdaterKart(){
 
 // ============================================================
 //  Fremdrift. Steg 1 (nedlasting) og 2 (klargjøring) er målt.
-//  Steg 3 (Revit bygger toposolidet) måles i ferdige fliser. Det vises
-//  ingen tidsestimat - tiden per flis varierer for mye til at det treffer.
+//  Steg 3 (Revit bygger toposolidet) gir ingen målbar fremdrift - der
+//  vises en stripe som viser at Revit jobber, pluss brukt tid.
 // ============================================================
 const FR_STEG={1:'Henter terreng fra Kartverket',2:'Klargjør punkter for Revit',3:'Revit bygger toposolidet'};
 let frStart=0,frTotalTimer=null,frEstTimer=null;
@@ -590,11 +583,7 @@ function visResultat(data){
   }
   if(data.tider){
     const t=data.tider;
-    html+=`<div class="fr-tider">Tid: terreng ${fmtTid(t.terreng)} · klargjøring ${fmtTid(t.punkter)} · Revit ${fmtTid(t.revit)}`+
-      (data.fliser>1?` · ${data.fliser} fliser`:'')+`</div>`;
-  }
-  if(data.utelatt && data.utelatt.hull){
-    html+=`<div class="fr-tider">Hull under ${data.utelatt.elementer} element(er): ${data.utelatt.punkter} punkter utelatt i ${data.utelatt.hull} område(r)</div>`;
+    html+=`<div class="fr-tider">Tid: terreng ${fmtTid(t.terreng)} · klargjøring ${fmtTid(t.punkter)} · Revit ${fmtTid(t.revit)}`+`</div>`;
   }
   if(data.warning){
     html+=`<div class="detail-warn">⚠ ${data.warning}</div>`;
@@ -626,8 +615,6 @@ async function kjor(){
     radius:parseFloat(document.getElementById('radius').value),
     tetthet:parseFloat(document.getElementById('tetthet').value),
     relativ_z:document.getElementById('relativ-z').checked,
-    fliser:document.getElementById('fliser').checked,
-    utelat_elementer:document.getElementById('utelat-elementer').checked,
     utsnitt_form:utsnittForm,
   };
 
