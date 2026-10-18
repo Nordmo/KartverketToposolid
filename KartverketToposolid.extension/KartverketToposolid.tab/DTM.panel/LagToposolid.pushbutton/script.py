@@ -666,8 +666,8 @@ def _skriv_fremdriftslogg(n_punkter, sekunder, linjer):
     try:
         sti = os.path.join(os.path.dirname(_TIDSFIL), "revit_fremdrift_logg.txt")
         with open(sti, "w", encoding="utf-8") as f:
-            f.write("{} punkter, {:.1f} s, {} hendelser fra Revit\n".format(
-                n_punkter, sekunder, len(linjer)))
+            f.write("{} punkter, {:.1f} s, {} linjer (fase-skifter + maks 1 posisjon/s; "
+                    "linjer med --- er egne tidsmerker)\n".format(n_punkter, sekunder, len(linjer)))
             f.write("\n".join(linjer))
     except Exception:
         pass
@@ -740,13 +740,24 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None):
     # men brukes ikke til linjen - den er for grov (kun "Regenerating 0 %").
     logg = []
     t0 = time.time()
+    sist_pos = {"t": 0.0}
+
+    def merk(tekst):
+        logg.append("{:8.2f}s  --- {}".format(time.time() - t0, tekst))
 
     def on_revit_fremdrift(sender, e):
+        # Logger fase-skifter alltid, posisjonsoppdateringer maks 1 per sekund,
+        # slik at loggen dekker hele kjøringen og ikke fylles opp av ett steg.
         try:
-            tekst = (e.Caption or "").strip() or "Revit arbeider"
-            if len(logg) < 500:
+            naa = time.time()
+            stage = str(e.Stage)
+            if stage == "PositionChanged" and naa - sist_pos["t"] < 1.0:
+                return
+            sist_pos["t"] = naa
+            if len(logg) < 3000:
+                tekst = (e.Caption or "").strip() or "Revit arbeider"
                 logg.append("{:8.2f}s  {:<16} {:>8} / {:<8} {}".format(
-                    time.time() - t0, str(e.Stage), e.Position, e.UpperRange, tekst))
+                    naa - t0, stage, e.Position, e.UpperRange, tekst))
         except Exception:
             pass
 
@@ -795,14 +806,20 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None):
             t = Transaction(doc, "Toposolid flis {}".format(k + 1))
             t.Start()
             try:
+                merk("flis {}/{}: Toposolid.Create start ({} punkter)".format(k + 1, n_fliser, nk))
+                tc = time.time()
                 ts = Toposolid.Create(doc, liste, toposolid_type_id, level.Id)
+                merk("flis {}/{}: Toposolid.Create ferdig etter {:.1f} s".format(k + 1, n_fliser, time.time() - tc))
                 try:
                     p = ts.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)
                     if p is not None and not p.IsReadOnly:
                         p.Set("{} (flis {}/{})".format(batch, k + 1, n_fliser) if n_fliser > 1 else batch)
                 except Exception:
                     pass
+                merk("flis {}/{}: Commit start".format(k + 1, n_fliser))
+                tc = time.time()
                 t.Commit()
+                merk("flis {}/{}: Commit ferdig etter {:.1f} s".format(k + 1, n_fliser, time.time() - tc))
             except Exception:
                 if t.HasStarted() and not t.HasEnded():
                     t.RollBack()
@@ -811,7 +828,9 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None):
             ferdig += nk
             rate = t_revit / float(ferdig)      # maalt i denne kjoeringen
             meld(3, til, "{} ferdig".format(tekst), segment=None)
+        merk("TransactionGroup.Assimilate start")
         tg.Assimilate()
+        merk("TransactionGroup.Assimilate ferdig")
     except Exception as ex:
         if tg.HasStarted() and not tg.HasEnded():
             tg.RollBack()
