@@ -43,7 +43,7 @@ import traceback
 # tatt.
 import clr
 clr.AddReference("PresentationFramework")
-from System.Windows import MessageBox, MessageBoxButton, MessageBoxImage
+from System.Windows import MessageBox, MessageBoxButton, MessageBoxImage, MessageBoxResult
 
 
 def _vis_feilmelding(tittel, tekst):
@@ -816,7 +816,35 @@ def _skriv_fremdriftslogg(n_punkter, sekunder, linjer):
         pass
 
 
-def opprett_toposolid(doc, fliser, base_pos, meld=None):
+def _er_kartverket_toposolid(t):
+    try:
+        p = t.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)
+        return bool(p and (p.AsString() or "").startswith("Kartverket-toposolid"))
+    except Exception:
+        return False
+
+
+def overlappende_toposolider(doc, fliser, base_pos):
+    """Eksisterende toposolider som overlapper området (bounding box i plan).
+    Revit sammenføyer nye toposolider med overlappende toposolider, og med
+    store toposolider kan det ta mange minutter per flis."""
+    FT = 0.3048
+    P = np.asarray([p for f in fliser for p in f], dtype=float)
+    x0 = P[:, 0].min() / FT + base_pos.X
+    x1 = P[:, 0].max() / FT + base_pos.X
+    y0 = P[:, 1].min() / FT + base_pos.Y
+    y1 = P[:, 1].max() / FT + base_pos.Y
+    ut = []
+    for t in FilteredElementCollector(doc).OfClass(Toposolid).WhereElementIsNotElementType():
+        bb = t.get_BoundingBox(None)
+        if bb is None:
+            continue
+        if bb.Max.X >= x0 and bb.Min.X <= x1 and bb.Max.Y >= y0 and bb.Min.Y <= y1:
+            ut.append(t)
+    return ut
+
+
+def opprett_toposolid(doc, fliser, base_pos, meld=None, slett=None):
     """Oppretter ett Toposolid per flis (liste av punktlister, x, y, z i
     meter RELATIVT til Project Base Point). Med én flis blir det ett
     toposolid som før.
@@ -915,6 +943,16 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None):
     tg = TransactionGroup(doc, "Lag Toposolid fra Kartverket-data")
     tg.Start()
     try:
+        if slett:
+            t = Transaction(doc, "Slett gamle toposolider i området")
+            t.Start()
+            ids = List[ElementId]()
+            for el in slett:
+                ids.Add(el.Id)
+            doc.Delete(ids)
+            t.Commit()
+            merk("slettet {} gamle toposolider i området".format(ids.Count))
+
         t = Transaction(doc, "Nivå for toposolid")
         t.Start()
         level = None
@@ -1105,7 +1143,26 @@ def do_lag_toposolid(doc, base_pos, payload, meld=None):
         n_utelatt = len(punkter) - len(set(p for f in fliser for p in f))
 
     t_punkter_start = time.time()
-    t_revit, n_fliser = opprett_toposolid(doc, fliser, base_pos, meld=meld)
+    # Gamle toposolider i samme område gjør at Revit sammenføyer det nye
+    # terrenget med dem, noe som kan ta mange minutter per flis. Spør om de
+    # skal slettes (kan angres med Ctrl+Z, sammen med det nye terrenget).
+    slett = []
+    gamle = overlappende_toposolider(doc, fliser, base_pos)
+    if gamle:
+        egne = sum(1 for t in gamle if _er_kartverket_toposolid(t))
+        svar = MessageBox.Show(
+            "Det finnes {} toposolid(er) i dette området fra før ({} laget av Lag Toposolid).\n\n"
+            "Revit sammenføyer det nye terrenget med overlappende toposolider, og det kan ta "
+            "mange minutter per flis.\n\n"
+            "Ja = slett de gamle og lag nytt (kan angres med Ctrl+Z)\n"
+            "Nei = behold dem og lag nytt likevel (kan bli tregt)\n"
+            "Avbryt = ikke lag noe".format(len(gamle), egne),
+            "Overlappende toposolider", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning)
+        if svar == MessageBoxResult.Cancel:
+            raise Exception("Avbrutt - ingenting er endret.")
+        if svar == MessageBoxResult.Yes:
+            slett = gamle
+    t_revit, n_fliser = opprett_toposolid(doc, fliser, base_pos, meld=meld, slett=slett)
     t_punkter = time.time() - t_punkter_start - t_revit
 
     z_vals = [p[2] for p in punkter]
