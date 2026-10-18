@@ -974,11 +974,41 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None, slett=None):
         except Exception:
             pass
 
+    # Revit-meldinger (advarsler/feil) under Commit logges med tekst, slik at
+    # vi ser om en flis henger fordi Revit venter på svar i en dialog.
+    # Advarsler slettes, så de ikke stopper opp eller hoper seg opp.
+    def on_failures(sender, e):
+        try:
+            from Autodesk.Revit.DB import FailureSeverity, FailureProcessingResult
+            fa = e.GetFailuresAccessor()
+            for m in list(fa.GetFailureMessages()):
+                sev = m.GetSeverity()
+                try:
+                    tekst = m.GetDescriptionText()
+                except Exception:
+                    tekst = "?"
+                merk("Revit-melding ({}): {} [{} elementer]".format(
+                    sev, tekst, m.GetFailingElementIds().Count))
+                if sev == FailureSeverity.Warning:
+                    fa.DeleteWarning(m)
+            e.SetProcessingResult(FailureProcessingResult.Continue)
+        except Exception as ex:
+            try:
+                merk("Feil i meldingshåndtering: {}".format(ex))
+            except Exception:
+                pass
+
     app = doc.Application
     abonnert = False
     try:
         app.ProgressChanged += on_revit_fremdrift
         abonnert = True
+    except Exception:
+        pass
+    abonnert_feil = False
+    try:
+        app.FailuresProcessing += on_failures
+        abonnert_feil = True
     except Exception:
         pass
 
@@ -1061,6 +1091,11 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None, slett=None):
         if abonnert:
             try:
                 app.ProgressChanged -= on_revit_fremdrift
+            except Exception:
+                pass
+        if abonnert_feil:
+            try:
+                app.FailuresProcessing -= on_failures
             except Exception:
                 pass
 
