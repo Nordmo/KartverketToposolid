@@ -526,7 +526,11 @@ def kjor_analyse(doc, state, bp):
     # Utsiden av hver valgt vegg. Innervegger og frittstående vegger hoppes over.
     sjekkes = []
     for v in vegger:
-        normal, status, andeler = K.utside_normal(v, nettvegger)
+        v["lag"] = K.lagvegger(v, nettvegger)
+        normal, status, andeler = K.utside_normal(v, nettvegger, lag_ids=v["lag"])
+        logg("Vegg {}: {} lagvegg(er) i samme linje (fundament/vanger), innelukket {:.0%} / {:.0%} "
+             "på hver side -> {}".format(v["navn"], len(v["lag"]), andeler[0], andeler[1],
+                                          "utside funnet" if normal is not None else status))
         if normal is None:
             hva = {"innervegg": "er en innervegg (innelukket på begge sider)",
                    "ikke innelukket": "omslutter ikke noe (åpen på begge sider) - "
@@ -599,7 +603,11 @@ def kjor_analyse(doc, state, bp):
         t = time.time()
         r = K.analyser_vegg(rn, H, v, hind, obs, res, n_str, state["pktavst"],
                             nett_ids, v["utside"], krumning_paa=state["krumning"],
-                            innfelling=innfelling, logg=logg)
+                            innfelling=innfelling, logg=logg, lag_ids=v["lag"])
+        dg = r["diagnose"]
+        logg("  {} punkter langs toppen. Observatører på utsiden og over toppen: {}, med fri sikt: {}, "
+             "som går inn over denne veggen: {}, med innsyn: {}".format(
+                 r["n_punkter"], dg["over_toppen"], dg["fri_sikt"], dg["inn_over_veggen"], dg["innsyn"]))
         r["vegg"] = v
         resultater.append(r)
         logg("  ferdig på {:.1f} s".format(time.time() - t))

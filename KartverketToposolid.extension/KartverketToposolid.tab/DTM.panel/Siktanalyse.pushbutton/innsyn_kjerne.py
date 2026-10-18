@@ -430,7 +430,7 @@ def _andel_innelukket(px, py, A, B, n=24, maks=1000.0):
     return float((t.min(axis=1) <= maks).mean())
 
 
-def utside_normal(vegg, nettvegger, terskel=0.75):
+def utside_normal(vegg, nettvegger, terskel=0.75, lag_ids=()):
     """Finner hvilken side av veggen som er utsiden. Et punkt like ved
     veggen er 'innelukket' hvis minst 75 % av stråler i alle retninger
     treffer en vegg i stasjonen (inkludert veggen selv). Innsiden er
@@ -446,8 +446,9 @@ def utside_normal(vegg, nettvegger, terskel=0.75):
     n = np.array([t[1], -t[0]])
     midt = 0.5 * (A[k] + B[k])
     off = 0.5 * float(vegg.get("bredde", 0.0)) + 0.3
-    alleA = np.vstack([_segmenter(v["polyline"])[0] for v in nettvegger])
-    alleB = np.vstack([_segmenter(v["polyline"])[1] for v in nettvegger])
+    bruk = [v for v in nettvegger if v["id"] not in lag_ids]
+    alleA = np.vstack([_segmenter(v["polyline"])[0] for v in bruk])
+    alleB = np.vstack([_segmenter(v["polyline"])[1] for v in bruk])
     a1 = _andel_innelukket(*(midt + n * off), alleA, alleB)
     a2 = _andel_innelukket(*(midt - n * off), alleA, alleB)
     if a1 >= terskel and a2 < terskel:
@@ -457,6 +458,39 @@ def utside_normal(vegg, nettvegger, terskel=0.75):
     if a1 >= terskel and a2 >= terskel:
         return None, "innervegg", (a1, a2)
     return None, "ikke innelukket", (a1, a2)
+
+
+def _akse(pl):
+    """Retning og midtpunkt for lengste delsegment."""
+    A, B = _segmenter(pl)
+    L = np.hypot(*(B - A).T)
+    k = int(np.argmax(L))
+    return (B[k] - A[k]) / max(L[k], 1e-9), A[k], B[k]
+
+
+def lagvegger(vegg, andre, toleranse=0.05):
+    """Vegger som ligger i samme linje som 'vegg': parallelle og så tett
+    inntil at fotavtrykkene overlapper eller møtes - f.eks. fundamentvegg
+    rett under, eller utvendig/innvendig vangvegg modellert som egen vegg.
+    Slike vegger er i praksis en del av samme vegg og skal ikke regnes som
+    'en annen stasjonsvegg' som siktlinjen krysser."""
+    u, a, b = _akse(vegg["polyline"])
+    n = np.array([-u[1], u[0]])
+    s0, s1 = sorted([float(a @ u), float(b @ u)])
+    ut = set()
+    for v in andre:
+        if v["id"] == vegg["id"]:
+            continue
+        u2, a2, b2 = _akse(v["polyline"])
+        if abs(float(u @ u2)) < 0.95:
+            continue  # ikke parallell
+        avst = abs(float((0.5 * (a2 + b2) - a) @ n))
+        if avst > 0.5 * (float(vegg.get("bredde", 0)) + float(v.get("bredde", 0))) + toleranse:
+            continue
+        t0, t1 = sorted([float(a2 @ u), float(b2 @ u)])
+        if min(s1, t1) - max(s0, t0) > 0.01:   # overlapper langs veggen
+            ut.add(v["id"])
+    return ut
 
 
 def punkter_langs_innfelt(polyline, avstand, innfelling):
@@ -488,7 +522,7 @@ def punkter_langs_innfelt(polyline, avstand, innfelling):
 
 def analyser_vegg(rn, H, vegg, hindringer, obs, steg, n_straaler, punktavstand,
                   nett_ids, utside, krumning_paa=True, innfelling=0.5,
-                  straale_bunt=192, logg=None):
+                  straale_bunt=192, logg=None, lag_ids=()):
     """
     vegg: {"id", "polyline", "topp", "bunn"} - veggen som sjekkes
     hindringer: {"A", "B", "topp", "eier"} - fotavtrykk for ALLE vegger i
@@ -510,6 +544,8 @@ def analyser_vegg(rn, H, vegg, hindringer, obs, steg, n_straaler, punktavstand,
     beste_py = np.full(n_obs, np.nan)
     beste_fall = np.zeros(n_obs)
     synlig_noen = np.zeros(n_obs, dtype=bool)
+    over_toppen = np.zeros(n_obs, dtype=bool)
+    ser_ubeh = np.zeros(n_obs, dtype=bool)
 
     topp = float(vegg["topp"])
     hoyde = max(0.0, topp - float(vegg["bunn"]))
@@ -522,7 +558,10 @@ def analyser_vegg(rn, H, vegg, hindringer, obs, steg, n_straaler, punktavstand,
     HB_alle = np.asarray(hindringer["B"], dtype=float).reshape(-1, 2)
     Ht_alle = np.asarray(hindringer["topp"], dtype=float)
     egen = np.array([e == vegg["id"] for e in eier], dtype=bool)
-    i_nett = np.array([e in nett_ids for e in eier], dtype=bool)
+    lag = np.array([e in lag_ids for e in eier], dtype=bool)
+    # Lagvegger (fundament under, vangvegger inntil) er fysiske hindringer,
+    # men er ikke 'en annen stasjonsvegg' for inngangs- og dybdesjekken.
+    i_nett = np.array([e in nett_ids for e in eier], dtype=bool) & ~lag
     HA, HB, Htopp = HA_alle[~egen], HB_alle[~egen], Ht_alle[~egen]
     NA, NB, Ntopp = HA_alle[i_nett & ~egen], HB_alle[i_nett & ~egen], Ht_alle[i_nett & ~egen]
 
@@ -538,6 +577,7 @@ def analyser_vegg(rn, H, vegg, hindringer, obs, steg, n_straaler, punktavstand,
         kand = np.nonzero(((dx * nx + dy * ny) > 0.02 * D) & (a_obs > 0))[0]
         if kand.size == 0:
             continue
+        over_toppen[kand] = True
         Dk = D[kand]
         theta = np.arctan2(dy[kand], dx[kand])
         k = np.mod(np.round(theta / dtheta).astype(np.int64), n_straaler)
@@ -572,6 +612,7 @@ def analyser_vegg(rn, H, vegg, hindringer, obs, steg, n_straaler, punktavstand,
         if not synlig.any():
             continue
         vi = kand[synlig]
+        ser_ubeh[vi] = True
         Dv = D[vi]
         ux = dx[vi] / Dv
         uy = dy[vi] / Dv
@@ -616,6 +657,12 @@ def analyser_vegg(rn, H, vegg, hindringer, obs, steg, n_straaler, punktavstand,
         "fall": beste_fall,
         "ser_toppen": synlig_noen,
         "n_punkter": len(P),
+        "diagnose": {
+            "over_toppen": int(over_toppen.sum()),   # på utsiden og høyere enn toppen
+            "fri_sikt": int(ser_ubeh.sum()),         # ... og ingen hindring i veien
+            "inn_over_veggen": int(synlig_noen.sum()),  # ... og går inn over denne veggen
+            "innsyn": int((beste > 0).sum()),
+        },
         "topp": topp,
         "hoyde": hoyde,
     }
