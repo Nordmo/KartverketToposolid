@@ -463,10 +463,20 @@ def del_i_fliser(punkter, rr, cc, maks_per_flis):
         return [punkter]
     side = max(8, int(math.sqrt(maks_per_flis)))
     P = np.asarray(punkter, dtype=float)
+
+    def kanter(lo, hi):
+        # Like store fliser: del spennet i n like deler i stedet for faste
+        # skritt (faste skritt ga én stor flis og smale rester i kanten).
+        spenn = hi - lo
+        n_deler = max(1, int(math.ceil(spenn / float(side))))
+        return [lo + int(round(i * spenn / float(n_deler))) for i in range(n_deler + 1)]
+
+    rk = kanter(int(rr.min()), int(rr.max()))
+    ck = kanter(int(cc.min()), int(cc.max()))
     fliser = []
-    for r0 in range(int(rr.min()), int(rr.max()) + 1, side):
-        for c0 in range(int(cc.min()), int(cc.max()) + 1, side):
-            m = (rr >= r0) & (rr <= r0 + side) & (cc >= c0) & (cc <= c0 + side)
+    for r0, r1 in zip(rk[:-1], rk[1:]):
+        for c0, c1 in zip(ck[:-1], ck[1:]):
+            m = (rr >= r0) & (rr <= r1) & (cc >= c0) & (cc <= c1)
             if m.sum() < 3:
                 continue
             Q = P[m]
