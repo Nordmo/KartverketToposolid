@@ -12,7 +12,9 @@ pyRevit sin CPython-motor). Bruker ikke WebView2. Revit 2024 eller nyere.
 2. Trykk **Innsyn**. Har du merket toposolidet og veggene på forhånd, er de
    allerede valgt. Ellers bruker du knappene i dialogen:
    - **Velg toposolid** (velges automatisk hvis det bare finnes ett)
-   - **Velg stasjonsvegger**: veggene som omslutter stasjonen
+   - **Velg stasjonsvegger**: veggene du vil sjekke. Du trenger ikke velge
+     alle: resten av stasjonen finnes automatisk via hjørner og
+     T-koblinger, og avgjør hva som er inne og ute
    - **Velg ekstra skjerming** (valgfritt): gjerder, skjermvegger o.l.
 3. Sett koordinatsystem og nullpunkt **likt som da toposolidet ble laget**.
    Nullpunkt fylles inn fra Project Base Point.
@@ -31,12 +33,21 @@ Innstillingene huskes til neste gang (`%APPDATA%\KartverketToposolid\innsyn.json
   terrengendringer i modellen er med. DTM-høyden justeres automatisk mot
   toposolidet (medianavvik), så høydedatum (NN2000, NN54, +95 m, relativ Z)
   trenger ikke oppgis.
-- **Hver vegg for seg:** punkter langs veggtoppen (standard hver 1 m). Fra
-  hvert punkt regnes en horisont utover i terrenget, inkludert de andre
-  veggene og valgt skjerming. En observatør som ser veggtoppen og ligger
-  høyere enn den, ser inn. Siktlinjen fortsetter inn i stasjonen med samme
-  fall, og **dybden under veggtopp** der den når motsatt side er resultatet.
-  Dybden begrenses til veggens høyde.
+- **Stasjonen:** de valgte veggene pluss alle vegger som henger sammen med
+  dem (felles hjørne eller T-kobling). Innsiden av hver valgt vegg er den
+  siden som er omsluttet av stasjonen. Innervegger (omsluttet på begge
+  sider) sjekkes ikke.
+- **Hindringer:** terreng, alle vegger i modellen innenfor radius, og valgt
+  ekstra skjerming.
+- **Hver vegg for seg:** punkter langs veggtoppen (standard hver 1 m), med
+  start et lite stykke inn fra endene slik at linjene treffer selve veggen
+  og ikke hjørnet. En observatør teller for en vegg bare hvis siktlinjen
+  går inn over **akkurat den veggen** (ingen annen stasjonsvegg mellom
+  observatøren og veggtoppen), og observatøren ligger høyere enn toppen.
+- **Dybde:** siktlinjen fortsetter inn i stasjonen med samme fall til den
+  treffer en vegg som er høy nok til å stoppe den (også skillevegger),
+  eller forlater stasjonen over motsatt vegg. **Dybden** er hvor langt
+  under veggtoppen linjen er der, begrenset til veggens høyde (gulvet).
 - **Innsyn** = dybde større enn «Tillatt innsyn under veggtopp».
 - **Jordkrumning og refraksjon** (k = 0,13) er med som standard (ca. 0,3 m
   ved 2 km).
@@ -62,9 +73,12 @@ Innstillingene huskes til neste gang (`%APPDATA%\KartverketToposolid\innsyn.json
   opp til toppen. Gap *mellom* vegger blokkerer ikke siktlinjer.
 - **Veggtopp** hentes fra veggens bounding box (høyeste punkt). Vegger med
   skrå eller varierende topp regnes med høyeste punkt.
-- **Innhegningen** er det konvekse omrisset av veggene. For L-formede
-  stasjoner blir den indre lengden litt overvurdert (gir mer innsyn, altså
-  på den sikre siden).
+- **Stasjonen finnes via geometri:** vegger regnes som tilkoblet hvis et
+  endepunkt ligger innenfor 0,6 m fra en annen veggs senterlinje. Vegger
+  med større gap mellom seg blir ikke med, og da kan innsiden bli feil
+  (rapporten varsler om vegger som ikke omslutter noe).
+- **Vegger i lenkede modeller** er ikke med, verken som stasjon eller
+  hindring.
 - **Koordinater:** samme oppsett som Lag Toposolid, dvs. ren forskyvning via
   Project Base Point og ingen rotasjon (angle to true north brukes ikke).
 - **HPCS:** transformasjonen er kopiert uendret fra Lag Toposolid, slik at

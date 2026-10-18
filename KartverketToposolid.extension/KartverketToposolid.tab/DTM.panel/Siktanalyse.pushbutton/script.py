@@ -460,9 +460,45 @@ def kjor_analyse(doc, state, bp):
         if d:
             skjerm.append(d)
 
-    hull = K.konveks_hull(np.vstack([v["polyline"] for v in vegger]))
+    # Alle vegger i området: de er fysiske hindringer, og de som henger
+    # sammen med de valgte veggene utgjør stasjonen (avgjør hva som er inne).
+    valgt_senter = np.vstack([v["polyline"] for v in vegger]).mean(axis=0)
+    valgte_ids = set(v["id"] for v in vegger)
+    alle_vegger = list(vegger)
+    for el in FilteredElementCollector(doc).OfClass(Wall).WhereElementIsNotElementType():
+        if id_tall(el.Id) in valgte_ids:
+            continue
+        try:
+            d, _ = element_linjedata(el)
+        except Exception:
+            d = None
+        if d is None or not isinstance(el.Location, LocationCurve):
+            continue
+        if np.hypot(*(d["polyline"] - valgt_senter).T).min() <= R + 100.0:
+            alle_vegger.append(d)
+    nett_ids = K.finn_stasjonsnett(alle_vegger, valgte_ids)
+    nettvegger = [v for v in alle_vegger if v["id"] in nett_ids]
+    logg("Stasjon: {} valgte vegger, {} vegger i stasjonen totalt (funnet via hjørner/T-koblinger), "
+         "{} vegger i området".format(len(vegger), len(nettvegger), len(alle_vegger)))
+
+    # Utsiden av hver valgt vegg. Innervegger og frittstående vegger hoppes over.
+    sjekkes = []
+    for v in vegger:
+        normal, status, andeler = K.utside_normal(v, nettvegger)
+        if normal is None:
+            hva = {"innervegg": "er en innervegg (innelukket på begge sider)",
+                   "ikke innelukket": "omslutter ikke noe (åpen på begge sider) - "
+                                      "velg vegger som henger sammen med resten av stasjonen"}.get(status, status)
+            advarsler.append("Vegg {} {} og ble ikke sjekket.".format(v["navn"], hva))
+            continue
+        v["utside"] = normal
+        sjekkes.append(v)
+    if not sjekkes:
+        raise Exception("Ingen av de valgte veggene er yttervegger i en innelukket stasjon.\n\n"
+                        + "\n".join(advarsler))
+
+    hull = K.konveks_hull(np.vstack([v["polyline"] for v in nettvegger]))
     senter = hull.mean(axis=0)
-    logg("Stasjon: {} vegger, senter intern ({:.1f}, {:.1f}) m".format(len(vegger), senter[0], senter[1]))
     rn = K.Rutenett.rundt(senter[0], senter[1], R + 100.0, res)
     logg("Analyseområde: radius {:.0f} m, rutenett {} x {} ({:.1f} mill. celler)".format(
         R, rn.nrad, rn.nkol, rn.nrad * rn.nkol / 1e6))
@@ -502,7 +538,7 @@ def kjor_analyse(doc, state, bp):
     logg("Observatørpunkter: {}".format(obs["x"].size))
 
     A, B, T, E = [], [], [], []
-    for v in vegger:
+    for v in alle_vegger:
         a, b, tt, e = K.fotavtrykk_segmenter(v["polyline"], v["bredde"], v["topp"], v["id"])
         A += a; B += b; T += tt; E += e
     for s in skjerm:
@@ -512,19 +548,24 @@ def kjor_analyse(doc, state, bp):
             "topp": np.array(T), "eier": E}
 
     n_str = K.antall_straaler(R, celle)
+    # Punkter langs veggtoppen starter et stykke inn fra endene, slik at
+    # linjene treffer selve veggen og ikke hjørnet mot naboveggen.
+    innfelling = max(0.5, 0.5 * max(v["bredde"] for v in nettvegger) + 0.1)
     resultater = []
-    for i, v in enumerate(vegger):
-        logg("Vegg {}/{}: {} (topp {:.2f}) ...".format(i + 1, len(vegger), v["navn"], v["topp"] - bpz))
+    for i, v in enumerate(sjekkes):
+        logg("Vegg {}/{}: {} (topp {:.2f}) ...".format(i + 1, len(sjekkes), v["navn"], v["topp"] - bpz))
         t = time.time()
-        r = K.analyser_vegg(rn, H, v, hind, hull, obs, res, n_str, state["pktavst"],
-                            krumning_paa=state["krumning"], logg=logg)
+        r = K.analyser_vegg(rn, H, v, hind, obs, res, n_str, state["pktavst"],
+                            nett_ids, v["utside"], krumning_paa=state["krumning"],
+                            innfelling=innfelling, logg=logg)
         r["vegg"] = v
         resultater.append(r)
         logg("  ferdig på {:.1f} s".format(time.time() - t))
 
     logg("Beregning ferdig på {:.0f} s".format(time.time() - t0))
     return {"obs": obs, "res": resultater, "advarsler": advarsler, "dz": dz, "mad": mad,
-            "hull": hull, "intern_til_crs": intern_til_crs, "bpz": bpz}
+            "hull": hull, "intern_til_crs": intern_til_crs, "bpz": bpz,
+            "n_nett": len(nettvegger), "n_omraade": len(alle_vegger)}
 
 
 # ======================================================================
@@ -686,7 +727,9 @@ def rapport(doc, state, an, slettet, n_linjer, n_ruter):
     logg("Radius {:.0f} m, observatørrutenett {:.0f} m, terreng {:.1f} m, krumning {}".format(
         state["radius"], state["celle"], state["res"], "på" if state["krumning"] else "av"))
     logg("Observatørpunkter: {}. DTM justert {:+.3f} m mot toposolidet.".format(obs["x"].size, an["dz"]))
-    logg("Kun terreng (DTM) + toposolid + valgte vegger/skjermer. Vegetasjon og bygg er ikke med.")
+    logg("Stasjonen: {} vegger (valgte + tilkoblede). Alle {} vegger i området er med som hindringer.".format(
+        an["n_nett"], an["n_omraade"]))
+    logg("Terreng = DTM + toposolid. Vegetasjon og bygg som ikke er modellert som vegger, er ikke med.")
     logg("-" * 78)
     tabell = []
     for r in an["res"]:

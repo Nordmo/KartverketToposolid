@@ -364,45 +364,176 @@ def krumning(s, paa):
     return s * s * (1.0 - K_REFRAKSJON) / (2.0 * JORDRADIUS)
 
 
-def analyser_vegg(rn, H, vegg, hindringer, hull, obs, steg, n_straaler,
-                  punktavstand, krumning_paa=True, straale_bunt=192, logg=None):
+def _endepunkter(pl):
+    pl = np.asarray(pl, dtype=float)[:, :2]
+    return pl[[0, -1]]
+
+
+def _segmenter(pl):
+    pl = np.asarray(pl, dtype=float)[:, :2]
+    return pl[:-1], pl[1:]
+
+
+def _avstand_punkter_segmenter(P, A, B):
+    """Minste avstand fra hvert punkt i P (n,2) til segmentene A->B (m,2)."""
+    P = np.asarray(P, dtype=float)[:, None, :]
+    A = np.asarray(A, dtype=float)[None, :, :]
+    B = np.asarray(B, dtype=float)[None, :, :]
+    e = B - A
+    L2 = np.maximum((e * e).sum(-1), 1e-12)
+    t = np.clip(((P - A) * e).sum(-1) / L2, 0.0, 1.0)
+    d = P - (A + t[..., None] * e)
+    return np.sqrt((d * d).sum(-1)).min(axis=1)
+
+
+def finn_stasjonsnett(vegger, valgte_ids, tol=0.6, maks_utstrekning=300.0):
+    """Finner alle vegger som henger sammen med de valgte: deler hjørne
+    eller T-kobling (endepunkt innenfor tol fra en annen veggs
+    senterlinje). Brukes til å avgjøre hva som er innsiden av stasjonen.
+    vegger: liste med {"id", "polyline"}. Returnerer set med id-er."""
+    etter_id = dict((v["id"], v) for v in vegger)
+    nett = set(i for i in valgte_ids if i in etter_id)
+    if not nett:
+        return nett
+    senter = np.vstack([_endepunkter(etter_id[i]["polyline"]) for i in nett]).mean(axis=0)
+    kandidater = []
+    for v in vegger:
+        if v["id"] in nett:
+            continue
+        ep = _endepunkter(v["polyline"])
+        if np.hypot(ep[:, 0] - senter[0], ep[:, 1] - senter[1]).min() <= maks_utstrekning:
+            kandidater.append(v)
+    endret = True
+    while endret and kandidater:
+        endret = False
+        nA = np.vstack([_segmenter(etter_id[i]["polyline"])[0] for i in nett])
+        nB = np.vstack([_segmenter(etter_id[i]["polyline"])[1] for i in nett])
+        nE = np.vstack([_endepunkter(etter_id[i]["polyline"]) for i in nett])
+        rest = []
+        for v in kandidater:
+            vA, vB = _segmenter(v["polyline"])
+            kobla = (_avstand_punkter_segmenter(_endepunkter(v["polyline"]), nA, nB).min() <= tol
+                     or _avstand_punkter_segmenter(nE, vA, vB).min() <= tol)
+            if kobla:
+                nett.add(v["id"])
+                endret = True
+            else:
+                rest.append(v)
+        kandidater = rest
+    return nett
+
+
+def _andel_innelukket(px, py, A, B, n=24, maks=1000.0):
+    """Andel av n stråler fra (px,py) som treffer et av segmentene."""
+    th = np.arange(n) * 2.0 * math.pi / n
+    t = straale_segment_t(np.full(n, px), np.full(n, py), np.cos(th), np.sin(th), A, B, tmin=1e-3)
+    return float((t.min(axis=1) <= maks).mean())
+
+
+def utside_normal(vegg, nettvegger, terskel=0.75):
+    """Finner hvilken side av veggen som er utsiden. Et punkt like ved
+    veggen er 'innelukket' hvis minst 75 % av stråler i alle retninger
+    treffer en vegg i stasjonen (inkludert veggen selv). Innsiden er
+    innelukket, utsiden ikke.
+    Returnerer ((nx, ny) eller None, status, (andel_side1, andel_side2))."""
+    pl = np.asarray(vegg["polyline"], dtype=float)[:, :2]
+    A, B = _segmenter(pl)
+    lengder = np.hypot(*(B - A).T)
+    k = int(np.argmax(lengder))
+    if lengder[k] < 1e-6:
+        return None, "for kort", (0.0, 0.0)
+    t = (B[k] - A[k]) / lengder[k]
+    n = np.array([t[1], -t[0]])
+    midt = 0.5 * (A[k] + B[k])
+    off = 0.5 * float(vegg.get("bredde", 0.0)) + 0.3
+    alleA = np.vstack([_segmenter(v["polyline"])[0] for v in nettvegger])
+    alleB = np.vstack([_segmenter(v["polyline"])[1] for v in nettvegger])
+    a1 = _andel_innelukket(*(midt + n * off), alleA, alleB)
+    a2 = _andel_innelukket(*(midt - n * off), alleA, alleB)
+    if a1 >= terskel and a2 < terskel:
+        return (-n[0], -n[1]), "ok", (a1, a2)
+    if a2 >= terskel and a1 < terskel:
+        return (n[0], n[1]), "ok", (a1, a2)
+    if a1 >= terskel and a2 >= terskel:
+        return None, "innervegg", (a1, a2)
+    return None, "ikke innelukket", (a1, a2)
+
+
+def punkter_langs_innfelt(polyline, avstand, innfelling):
+    """Som punkter_langs, men starter/slutter 'innfelling' m fra endene,
+    slik at punktene ligger på selve veggen og ikke i hjørnet der den
+    møter naboveggen."""
+    pl = np.asarray(polyline, dtype=float)[:, :2]
+    seg = np.diff(pl, axis=0)
+    L = np.hypot(seg[:, 0], seg[:, 1])
+    tot = float(L.sum())
+    if tot <= 2 * innfelling + 0.1:
+        # kort vegg: bare midtpunktet
+        s_liste = [tot / 2.0]
+    else:
+        lengde = tot - 2 * innfelling
+        n = max(1, int(math.ceil(lengde / avstand)))
+        s_liste = [innfelling + lengde * k / float(n) for k in range(n + 1)]
+    kum = np.concatenate([[0.0], np.cumsum(L)])
+    pkt, tan = [], []
+    for sv in s_liste:
+        i = int(np.clip(np.searchsorted(kum, sv, side="right") - 1, 0, len(L) - 1))
+        if L[i] < 1e-9:
+            continue
+        u = seg[i] / L[i]
+        pkt.append(pl[i] + u * (sv - kum[i]))
+        tan.append(u)
+    return np.array(pkt), np.array(tan)
+
+
+def analyser_vegg(rn, H, vegg, hindringer, obs, steg, n_straaler, punktavstand,
+                  nett_ids, utside, krumning_paa=True, innfelling=0.5,
+                  straale_bunt=192, logg=None):
     """
-    vegg: {"id": ..., "polyline": (m,2|3), "topp": z, "bunn": z}
-    hindringer: {"A": (n,2), "B": (n,2), "topp": (n,), "eier": (n,)} - alle
-        vegger/skjermer; segmenter som tilhoerer veggen selv (eier == id)
-        utelates.
-    obs: fra lag_observatorer
-    Returnerer dict med per-observatør beste dybde og tilhoerende P og fall.
+    vegg: {"id", "polyline", "topp", "bunn"} - veggen som sjekkes
+    hindringer: {"A", "B", "topp", "eier"} - fotavtrykk for ALLE vegger i
+        området + skjerming. Veggens egne segmenter (eier == id) utelates.
+    nett_ids: id-ene til veggene som utgjør stasjonen (finn_stasjonsnett)
+    utside: (nx, ny) - normal som peker ut av stasjonen (utside_normal)
+
+    En siktlinje O -> P regnes for denne veggen bare hvis den går inn over
+    nettopp denne veggen: O ligger på utsiden, og linjen krysser ingen
+    annen stasjonsvegg før P. Inne i stasjonen fortsetter linjen med samme
+    fall til den treffer en stasjonsvegg som er høy nok til å stoppe den,
+    eller forlater stasjonen over motsatt vegg. Dybden er hvor langt under
+    veggtoppen linjen er der, begrenset til veggens høyde (gulvet).
     """
     ox, oy, oz = obs["x"], obs["y"], obs["z"]
     n_obs = ox.size
-    beste = np.zeros(n_obs)               # dybde (m under veggtopp), 0 = ingen
+    beste = np.zeros(n_obs)
     beste_px = np.full(n_obs, np.nan)
     beste_py = np.full(n_obs, np.nan)
     beste_fall = np.zeros(n_obs)
-    synlig_noen = np.zeros(n_obs, dtype=bool)   # ser veggtoppen i det hele tatt
+    synlig_noen = np.zeros(n_obs, dtype=bool)
 
     topp = float(vegg["topp"])
     hoyde = max(0.0, topp - float(vegg["bunn"]))
     zP = topp + 0.01   # P løftes 1 cm for å ikke skjermes av egen vegg
-    sentroide = hull.mean(axis=0)
-    P, T = punkter_langs(vegg["polyline"], punktavstand)
+    P, T = punkter_langs_innfelt(vegg["polyline"], punktavstand, innfelling)
     dtheta = 2.0 * math.pi / n_straaler
-    eier = np.asarray(hindringer.get("eier", [None] * len(hindringer["topp"])), dtype=object)
-    andre = np.array([e != vegg.get("id") for e in eier], dtype=bool)
-    HA = np.asarray(hindringer["A"], dtype=float).reshape(-1, 2)[andre]
-    HB = np.asarray(hindringer["B"], dtype=float).reshape(-1, 2)[andre]
-    Htopp = np.asarray(hindringer["topp"], dtype=float)[andre]
+
+    eier = np.asarray(hindringer["eier"], dtype=object)
+    HA_alle = np.asarray(hindringer["A"], dtype=float).reshape(-1, 2)
+    HB_alle = np.asarray(hindringer["B"], dtype=float).reshape(-1, 2)
+    Ht_alle = np.asarray(hindringer["topp"], dtype=float)
+    egen = np.array([e == vegg["id"] for e in eier], dtype=bool)
+    i_nett = np.array([e in nett_ids for e in eier], dtype=bool)
+    HA, HB, Htopp = HA_alle[~egen], HB_alle[~egen], Ht_alle[~egen]
+    NA, NB, Ntopp = HA_alle[i_nett & ~egen], HB_alle[i_nett & ~egen], Ht_alle[i_nett & ~egen]
 
     for ip in range(len(P)):
         px, py = float(P[ip, 0]), float(P[ip, 1])
         nx, ny = T[ip, 1], -T[ip, 0]
-        if (px - sentroide[0]) * nx + (py - sentroide[1]) * ny < 0:
+        if nx * utside[0] + ny * utside[1] < 0:
             nx, ny = -nx, -ny
         dx = ox - px
         dy = oy - py
-        D = np.hypot(dx, dy)
-        D = np.maximum(D, 1e-6)
+        D = np.maximum(np.hypot(dx, dy), 1e-6)
         a_obs = (oz - krumning(D, krumning_paa) - zP) / D
         kand = np.nonzero(((dx * nx + dy * ny) > 0.02 * D) & (a_obs > 0))[0]
         if kand.size == 0:
@@ -441,13 +572,33 @@ def analyser_vegg(rn, H, vegg, hindringer, hull, obs, steg, n_straaler,
         if not synlig.any():
             continue
         vi = kand[synlig]
-        synlig_noen[vi] = True
         Dv = D[vi]
-        wx = -dx[vi] / Dv
-        wy = -dy[vi] / Dv
-        L = indre_lengde(hull, np.full(vi.size, px), np.full(vi.size, py), wx, wy)
+        ux = dx[vi] / Dv
+        uy = dy[vi] / Dv
+
+        # Må gå inn over DENNE veggen: ingen annen stasjonsvegg mellom O og P
+        if NA.size:
+            t_ut = straale_segment_t(np.full(vi.size, px), np.full(vi.size, py), ux, uy, NA, NB, tmin=1e-3)
+            inn_her = ~(t_ut < Dv[:, None]).any(axis=1)
+            vi, Dv, ux, uy = vi[inn_her], Dv[inn_her], ux[inn_her], uy[inn_her]
+            if vi.size == 0:
+                continue
+        synlig_noen[vi] = True
+
         fall = (oz[vi] - krumning(Dv, krumning_paa) - topp) / Dv
-        dyb = np.minimum(L * fall, hoyde)
+        # Videre inn i stasjonen (retning -u), synkende med 'fall'
+        t_slutt = np.full(vi.size, np.inf)
+        if NA.size:
+            t_inn = straale_segment_t(np.full(vi.size, px), np.full(vi.size, py), -ux, -uy, NA, NB, tmin=1e-3)
+            kryss = np.isfinite(t_inn)
+            z_linje = topp - fall[:, None] * np.where(kryss, t_inn, 0.0)
+            stopper = kryss & (Ntopp[None, :] >= z_linje - 1e-6)
+            t_stopp = np.where(stopper, t_inn, np.inf).min(axis=1)
+            t_ut_av = np.where(kryss, t_inn, -np.inf).max(axis=1)   # forlater stasjonen
+            t_ut_av = np.where(np.isfinite(t_ut_av), t_ut_av, np.inf)
+            t_slutt = np.minimum(t_stopp, t_ut_av)
+        dyb = np.minimum(t_slutt * fall, hoyde)
+        dyb = np.where(np.isfinite(dyb), dyb, hoyde)
         bedre = dyb > beste[vi]
         if bedre.any():
             vb = vi[bedre]
