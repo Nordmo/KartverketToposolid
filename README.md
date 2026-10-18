@@ -257,6 +257,11 @@ på reell feilsøking:
   bekreftet fungerer (per nå: Python 3.12) — trenger du en annen
   hovedversjon, faller scriptet tilbake til å be deg installere manuelt
   og lime inn stien.
+- **"WCS-feil ... ArcGIS Server Error"** ved stor radius → fikset: terrenget
+  hentes nå i fliser på maks 1000 x 1000 piksler, med punkttettheten som
+  oppløsning. Store toposolider (f.eks. 2 km radius med 5 m tetthet) går
+  derfor fint. Grensen er 1 million punkter per toposolid; blir det flere,
+  får du beskjed om hvilken tetthet som holder seg under grensen.
 - **"Name must be unique"** ved gjentatt bruk → skal ikke lenger skje
   (fikset ved å navngi opprettede Level ut fra kote)
 - **PyRevit er installert sentralt av IT til `Program Files`** (vanlig

@@ -379,58 +379,126 @@ def generer_punkter(epsg_inn, midtpunkt_e, midtpunkt_n, radius, tetthet,
     utm_e, utm_n = til_utm33_fn(midtpunkt_e, midtpunkt_n)
     minx, miny = utm_e - radius, utm_n - radius
     maxx, maxy = utm_e + radius, utm_n + radius
-    px = int(radius * 2)
 
-    coverage = hent_coverage_navn()[0]
-    params = {
-        "SERVICE": "WCS", "VERSION": "1.0.0", "REQUEST": "GetCoverage",
-        "COVERAGE": coverage, "CRS": "EPSG:25833",
-        "BBOX": "{},{},{},{}".format(minx, miny, maxx, maxy),
-        "WIDTH": px, "HEIGHT": px, "FORMAT": "GeoTIFF",
-    }
-    r = _http_get(WCS_URL, params=params, timeout=30)
-    if r.content[:1] == b"<":
-        raise Exception("WCS-feil: {}".format(r.content[:300]))
+    # Terrenget hentes direkte med punkttettheten som oppløsning (5 m
+    # tetthet = 5 m piksler), slik at store utsnitt ikke laster ned mer
+    # enn noedvendig. Med tetthet 1 m er dette identisk med tidligere.
+    steg = max(1, int(tetthet))
+    res = float(steg)
+    px = max(1, int(round(2 * radius / res)))
 
-    with MemoryFile(r.content) as mf:
-        with mf.open() as ds:
-            data = ds.read(1).astype(float)
-            nodata = ds.nodata
-            if nodata is not None:
-                data[data == nodata] = np.nan
-            data[data < -100] = np.nan
-            data[data > 3000] = np.nan
+    anslag = px * px * (math.pi / 4.0 if utsnitt_form == "sirkel" else 1.0)
+    if anslag > MAKS_PUNKTER:
+        raise Exception(
+            "For mange punkter: ca. {:,.0f} (grense {:,.0f}). Øk punkttettheten "
+            "eller reduser radius. Med {:.0f} m radius gir {:.0f} m tetthet ca. "
+            "{:,.0f} punkter.".format(
+                anslag, MAKS_PUNKTER, radius, _foreslaa_tetthet(radius, utsnitt_form),
+                (2 * radius / _foreslaa_tetthet(radius, utsnitt_form)) ** 2
+                * (math.pi / 4.0 if utsnitt_form == "sirkel" else 1.0),
+            ).replace(",", " ")
+        )
 
-            if np.all(np.isnan(data)):
-                raise Exception("Ingen gyldige høydeverdier. Sjekk koordinater og koordinatsystem.")
+    data = _hent_dtm_flislagt(minx, maxy, res, px, px)
 
-            transform = ds.transform
-            steg = max(1, int(tetthet))
-            rows, cols = data.shape
+    if np.all(np.isnan(data)):
+        raise Exception("Ingen gyldige høydeverdier. Sjekk koordinater og koordinatsystem.")
 
-            rå_punkter = []
-            for row in range(0, rows, steg):
-                for col in range(0, cols, steg):
-                    h = data[row, col]
-                    if np.isnan(h):
-                        continue
-                    ue, un = rasterio.transform.xy(transform, row, col)
-                    pe, pn = fra_utm33_fn(ue, un)
-                    if utsnitt_form == "sirkel":
-                        if ((pe - midtpunkt_e) ** 2 + (pn - midtpunkt_n) ** 2) ** 0.5 > radius:
-                            continue
-                    x = round(pe - nullpunkt_e, 4)
-                    y = round(pn - nullpunkt_n, 4)
-                    rå_punkter.append((x, y, float(h)))
+    # Pikselsentre (vektorisert - raskt ogsaa for flere hundre tusen punkter)
+    rows, cols = data.shape
+    rr, cc = np.nonzero(~np.isnan(data))
+    h = data[rr, cc]
+    ue = minx + (cc + 0.5) * res
+    un = maxy - (rr + 0.5) * res
+    pe, pn = fra_utm33_fn(ue, un)
+    pe = np.asarray(pe, dtype=float)
+    pn = np.asarray(pn, dtype=float)
+    if utsnitt_form == "sirkel":
+        inne = np.hypot(pe - midtpunkt_e, pn - midtpunkt_n) <= radius
+        pe, pn, h = pe[inne], pn[inne], h[inne]
 
-            if not rå_punkter:
-                raise Exception("Ingen punkter innenfor valgt utsnitt. Prøv større radius.")
+    if h.size == 0:
+        raise Exception("Ingen punkter innenfor valgt utsnitt. Prøv større radius.")
 
-            z_ref = min(p[2] for p in rå_punkter) if relativ_z else 0.0
-            voff = 0.0 if relativ_z else vert_offset
-            punkter = [(x, y, round(h - z_ref + voff, 3)) for (x, y, h) in rå_punkter]
+    z_ref = float(h.min()) if relativ_z else 0.0
+    voff = 0.0 if relativ_z else vert_offset
+    x = np.round(pe - nullpunkt_e, 4)
+    y = np.round(pn - nullpunkt_n, 4)
+    z = np.round(h - z_ref + voff, 3)
+    punkter = list(zip(x.tolist(), y.tolist(), z.tolist()))
 
     return punkter
+
+
+# Grense for antall punkter i ett toposolid. Satt for aa unngaa at Revit
+# henger paa enorme punktmengder - juster hvis Revit viser seg aa takle mer.
+MAKS_PUNKTER = 1000000
+
+# Kartverket sin WCS avviser for store enkeltforespoersler (ArcGIS-feilside).
+# 1000 x 1000 piksler per flis er kjent aa fungere.
+FLIS_PX = 1000
+
+
+def _foreslaa_tetthet(radius, utsnitt_form):
+    faktor = math.pi / 4.0 if utsnitt_form == "sirkel" else 1.0
+    t = 1
+    while (2 * radius / t) ** 2 * faktor > MAKS_PUNKTER:
+        t += 1
+    return t
+
+
+def _wcs_feiltekst(innhold):
+    tekst = innhold.decode("utf-8", errors="replace")
+    m = re.search(r"<title>([^<]*)</title>", tekst, re.I)
+    m2 = re.search(r"<ServiceException[^>]*>([^<]*)<", tekst)
+    detalj = (m2.group(1).strip() if m2 else "") or (m.group(1).strip() if m else "")
+    return "Kartverket avviste forespørselen{}".format(": " + detalj if detalj else "")
+
+
+def _hent_dtm_flislagt(minx, maxy, res, bredde_px, hoyde_px):
+    """Henter DTM i fliser paa maks FLIS_PX x FLIS_PX piksler og setter dem
+    sammen. Piksel (r, c) har senter i (minx + (c+0.5)res, maxy - (r+0.5)res).
+    NaN der Kartverket ikke har data."""
+    coverage = hent_coverage_navn()[0]
+    data = np.full((hoyde_px, bredde_px), np.nan)
+    fliser = [(r0, c0) for r0 in range(0, hoyde_px, FLIS_PX) for c0 in range(0, bredde_px, FLIS_PX)]
+    for i, (r0, c0) in enumerate(fliser):
+        h = min(FLIS_PX, hoyde_px - r0)
+        w = min(FLIS_PX, bredde_px - c0)
+        fx0 = minx + c0 * res
+        fy1 = maxy - r0 * res
+        params = {
+            "SERVICE": "WCS", "VERSION": "1.0.0", "REQUEST": "GetCoverage",
+            "COVERAGE": coverage, "CRS": "EPSG:25833",
+            "BBOX": "{},{},{},{}".format(fx0, fy1 - h * res, fx0 + w * res, fy1),
+            "WIDTH": w, "HEIGHT": h, "FORMAT": "GeoTIFF",
+        }
+        if len(fliser) > 1:
+            print("Henter terrengflis {}/{}".format(i + 1, len(fliser)))
+        flis = None
+        feil = None
+        for _forsok in range(3):
+            try:
+                r = _http_get(WCS_URL, params=params, timeout=60)
+                if r.content[:1] == b"<":
+                    raise Exception(_wcs_feiltekst(r.content))
+                with MemoryFile(r.content) as mf:
+                    with mf.open() as ds:
+                        flis = ds.read(1).astype(float)
+                        nodata = ds.nodata
+                break
+            except Exception as ex:
+                feil = ex
+        if flis is None:
+            raise Exception("Kunne ikke hente terrengflis {}/{}: {}".format(i + 1, len(fliser), feil))
+        if flis.shape != (h, w):
+            raise Exception("Uventet flisstørrelse {} fra Kartverket (forventet {}).".format(flis.shape, (h, w)))
+        if nodata is not None:
+            flis[flis == nodata] = np.nan
+        flis[flis < -100] = np.nan
+        flis[flis > 3000] = np.nan
+        data[r0:r0 + h, c0:c0 + w] = flis
+    return data
 
 
 # ====================================================================
