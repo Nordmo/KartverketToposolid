@@ -10,6 +10,13 @@ Flask-server. Alt skjer inne i Revit.
 
 Krever **Revit 2024 eller nyere** (Toposolid finnes ikke i eldre versjoner).
 
+Panelet **DTM** har to knapper:
+
+| Knapp | Hva den gjør |
+|---|---|
+| **Lag Toposolid** | Henter terreng fra Kartverket og lager Toposolid i modellen |
+| **Innsyn** | Tilleggsknapp for siktanalyse: sjekker om man kan se inn i en stasjon over egne vegger fra terrenget rundt (se [Innsyn](#innsyn-siktanalyse) under) |
+
 ---
 
 ## Hurtigstart
@@ -22,7 +29,8 @@ Krever **Revit 2024 eller nyere** (Toposolid finnes ikke i eldre versjoner).
    ```
 3. I Revit: **pyRevit**-fanen → **Settings** → **Custom Extension
    Directories** → legg til mappen som ble opprettet → **Reload**
-4. Trykk **Lag Toposolid** under fanen **KartverketToposolid**
+4. Trykk **Lag Toposolid** under fanen **KartverketToposolid**. Knappen
+   **Innsyn** ligger ved siden av i samme panel.
 
 Ferdig — regn med ca. 10 minutter første gang. Full forklaring,
 feilsøking og alternativer (bl.a. for videre utvikling med Git) finner
@@ -114,9 +122,9 @@ Directories** → legg til stien til mappen som ble opprettet
 (`...\Dokumenter\GitRepos\KartverketToposolid`, altså mappen som
 *inneholder* `.extension`-mappen).
 
-Lukk innstillingene, trykk **Reload** på pyRevit-fanen. Knappen **"Lag
-Toposolid"** skal nå dukke opp under fanen **KartverketToposolid** →
-panelet **DTM**.
+Lukk innstillingene, trykk **Reload** på pyRevit-fanen. Knappene **"Lag
+Toposolid"** og **"Innsyn"** skal nå dukke opp under fanen
+**KartverketToposolid** → panelet **DTM**.
 
 ### 4. Ferdig — lag din første Toposolid
 
@@ -134,6 +142,34 @@ panelet **DTM**.
 
 Skulle noe feile på tross av Reload, prøv en full restart av Revit før
 du feilsøker videre — se **Feilsøking** under.
+
+---
+
+## Innsyn (siktanalyse)
+
+Tilleggsknapp i samme panel som **Lag Toposolid**. Den sjekker om man kan
+se inn i en stasjon over dens egne vegger fra terrenget rundt, for
+eksempel for å dimensjonere skjerming mot innsyn.
+
+- **Ingen ekstra installasjon:** bruker de samme pakkene som Lag
+  Toposolid (numpy, rasterio, pyproj) og trenger ikke WebView2.
+- **Slik brukes den:** lag toposolid med Lag Toposolid, trykk **Innsyn**,
+  velg toposolidet og stasjonens vegger, og sett øyehøyde, tillatt innsyn
+  under veggtopp og radius (standard 2 km). Bruk samme koordinatsystem og
+  nullpunkt som da toposolidet ble laget.
+- **Terreng:** Kartverket DTM1 for hele radiusen, med toposolidet lagt
+  oppå. Høyden justeres automatisk mot toposolidet.
+- **Hver vegg vurderes for seg** mot sin egen topp. Observatører ligger i
+  et rutenett (standard 10 x 10 m) på høyeste punkt i hver celle, pluss
+  øyehøyde.
+- **Resultat:** siktlinjer for de verste observatørene per vegg,
+  innsynskart som fargede ruter i terrenget, rapport i pyRevit-konsollen og
+  CSV ved siden av modellfilen. Ny kjøring sletter forrige resultat.
+- **Begrensninger:** vegetasjon og bygg er ikke med (bart terreng), og
+  åpninger/porter i veggene vurderes ikke.
+
+Full beskrivelse av metode og begrensninger:
+[Siktanalyse.pushbutton/README.md](KartverketToposolid.extension/KartverketToposolid.tab/DTM.panel/Siktanalyse.pushbutton/README.md)
 
 ---
 
@@ -258,12 +294,19 @@ setup.ps1                              ← kjøres automatisk av bootstrap.ps1
 KartverketToposolid.extension/
 └── KartverketToposolid.tab/
     └── DTM.panel/
-        └── LagToposolid.pushbutton/
+        ├── LagToposolid.pushbutton/
+        │   ├── bundle.yaml
+        │   ├── script.py
+        │   ├── ui.html
+        │   ├── icon.png                          ← egen logo
+        │   ├── Microsoft.Web.WebView2.Core.dll   ← hentes i setup.ps1
+        │   ├── Microsoft.Web.WebView2.Wpf.dll    ← hentes i setup.ps1
+        │   └── WebView2Loader.dll                ← hentes i setup.ps1
+        └── Siktanalyse.pushbutton/               ← knappen «Innsyn»
             ├── bundle.yaml
-            ├── script.py
-            ├── ui.html
-            ├── icon.png                          ← egen logo
-            ├── Microsoft.Web.WebView2.Core.dll   ← hentes i setup.ps1
-            ├── Microsoft.Web.WebView2.Wpf.dll    ← hentes i setup.ps1
-            └── WebView2Loader.dll                ← hentes i setup.ps1
+            ├── script.py                         ← Revit-del: dialog, linjer, innsynskart
+            ├── innsyn_kjerne.py                  ← beregning (ren numpy)
+            ├── innsyn_dtm.py                     ← henting av DTM fra Kartverket
+            ├── icon.png
+            └── README.md                         ← metode og begrensninger
 ```
