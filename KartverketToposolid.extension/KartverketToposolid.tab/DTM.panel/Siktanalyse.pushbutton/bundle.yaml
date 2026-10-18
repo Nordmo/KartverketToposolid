@@ -1,0 +1,2 @@
+title: 'Innsyn'
+tooltip: 'Siktanalyse: sjekker om stasjonen kan ses inn i over egne vegger fra terrenget rundt (Kartverket DTM + toposolid). Hver vegg sjekkes for seg. Tegner verste siktlinjer og innsynskart.'
