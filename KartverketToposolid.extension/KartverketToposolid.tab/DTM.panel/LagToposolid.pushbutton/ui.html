@@ -181,6 +181,10 @@ __UTM_OPTIONS__
         <span>Del i fliser (målbar fremdrift)</span>
         <label class="toggle"><input type="checkbox" id="fliser" checked><span class="slider-t"></span></label>
       </div>
+      <div class="toggle-row" style="margin-top:6px" title="Lager hull i toposolidet under vegger, dekker, fundamenter o.l. som stikker ned i terrenget. Da slipper Revit å skjære toposolidet mot dem, noe som kan ta mange minutter.">
+        <span>Utelat terreng under modellerte elementer</span>
+        <label class="toggle"><input type="checkbox" id="utelat-elementer" checked><span class="slider-t"></span></label>
+      </div>
     </div>
     <hr class="divider">
     <button id="run-btn" onclick="kjor()">Lag Toposolid</button>
@@ -622,6 +626,9 @@ function visResultat(data){
     html+=`<div class="fr-tider">Tid: terreng ${fmtTid(t.terreng)} · klargjøring ${fmtTid(t.punkter)} · Revit ${fmtTid(t.revit)}`+
       (data.fliser>1?` · ${data.fliser} fliser`:'')+`</div>`;
   }
+  if(data.utelatt && data.utelatt.hull){
+    html+=`<div class="fr-tider">Hull under ${data.utelatt.elementer} element(er): ${data.utelatt.punkter} punkter utelatt i ${data.utelatt.hull} område(r)</div>`;
+  }
   if(data.warning){
     html+=`<div class="detail-warn">⚠ ${data.warning}</div>`;
   }
@@ -653,6 +660,7 @@ async function kjor(){
     tetthet:parseFloat(document.getElementById('tetthet').value),
     relativ_z:document.getElementById('relativ-z').checked,
     fliser:document.getElementById('fliser').checked,
+    utelat_elementer:document.getElementById('utelat-elementer').checked,
     utsnitt_form:utsnittForm,
   };
 
