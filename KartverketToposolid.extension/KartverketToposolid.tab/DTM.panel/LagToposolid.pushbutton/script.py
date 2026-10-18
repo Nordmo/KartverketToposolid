@@ -804,6 +804,27 @@ def _beskriv_sammenfoyning(doc, ts):
         return "kunne ikke lese sammenføyninger ({})".format(ex)
 
 
+def _elementer_i_omraade(doc, ts):
+    """Modellelementer hvis bounding box overlapper flisens (antall per
+    kategori). Skrives før Commit, så vi ser hva Revit kan komme til å
+    sammenføye flisen med - også om Commit henger."""
+    try:
+        from Autodesk.Revit.DB import BoundingBoxIntersectsFilter, Outline
+        bb = ts.get_BoundingBox(None)
+        filt = BoundingBoxIntersectsFilter(Outline(bb.Min, bb.Max))
+        teller = {}
+        for el in FilteredElementCollector(doc).WherePasses(filt).WhereElementIsNotElementType():
+            if el.Id == ts.Id or el.Category is None:
+                continue
+            navn = el.Category.Name
+            teller[navn] = teller.get(navn, 0) + 1
+        if not teller:
+            return "ingen"
+        return ", ".join("{} {}".format(v, k) for k, v in sorted(teller.items(), key=lambda kv: -kv[1]))
+    except Exception as ex:
+        return "kunne ikke lese ({})".format(ex)
+
+
 def _skriv_fremdriftslogg(n_punkter, sekunder, linjer):
     """Logger hvilke fremdriftshendelser Revit sendte (for feilsoeking)."""
     try:
@@ -912,9 +933,30 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None, slett=None):
     logg = []
     t0 = time.time()
     sist_pos = {"t": 0.0}
+    # Loggen skrives LØPENDE til fil, slik at den finnes selv om Revit
+    # henger eller krasjer midt i en flis.
+    loggfil = {"f": None}
+    try:
+        sti = os.path.join(os.path.dirname(_TIDSFIL), "revit_fremdrift_logg.txt")
+        os.makedirs(os.path.dirname(sti), exist_ok=True)
+        loggfil["f"] = open(sti, "w", encoding="utf-8")
+        loggfil["f"].write("{} punkter i {} fliser, startet {} (skrives løpende)\n".format(
+            n_tot, len(xyz_fliser), time.strftime("%Y-%m-%d %H:%M:%S")))
+        loggfil["f"].flush()
+    except Exception:
+        loggfil["f"] = None
+
+    def _skriv(linje):
+        logg.append(linje)
+        try:
+            if loggfil["f"] is not None:
+                loggfil["f"].write(linje + "\n")
+                loggfil["f"].flush()
+        except Exception:
+            pass
 
     def merk(tekst):
-        logg.append("{:8.2f}s  --- {}".format(time.time() - t0, tekst))
+        _skriv("{:8.2f}s  --- {}".format(time.time() - t0, tekst))
 
     def on_revit_fremdrift(sender, e):
         # Logger fase-skifter alltid, posisjonsoppdateringer maks 1 per sekund,
@@ -927,7 +969,7 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None, slett=None):
             sist_pos["t"] = naa
             if len(logg) < 3000:
                 tekst = (e.Caption or "").strip() or "Revit arbeider"
-                logg.append("{:8.2f}s  {:<16} {:>8} / {:<8} {}".format(
+                _skriv("{:8.2f}s  {:<16} {:>8} / {:<8} {}".format(
                     naa - t0, stage, e.Position, e.UpperRange, tekst))
         except Exception:
             pass
@@ -991,6 +1033,8 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None, slett=None):
                         p.Set("{} (flis {}/{})".format(batch, k + 1, n_fliser) if n_fliser > 1 else batch)
                 except Exception:
                     pass
+                merk("flis {}/{}: elementer i flisens område før Commit: {}".format(
+                    k + 1, n_fliser, _elementer_i_omraade(doc, ts)))
                 merk("flis {}/{}: Commit start".format(k + 1, n_fliser))
                 tc = time.time()
                 t.Commit()
@@ -1021,7 +1065,12 @@ def opprett_toposolid(doc, fliser, base_pos, meld=None, slett=None):
                 pass
 
     brukt = time.time() - t0
-    _skriv_fremdriftslogg(n_tot, brukt, logg)
+    try:
+        if loggfil["f"] is not None:
+            loggfil["f"].write("FERDIG: {:.1f} s totalt\n".format(brukt))
+            loggfil["f"].close()
+    except Exception:
+        pass
     return brukt, n_fliser
 
 
