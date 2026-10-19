@@ -79,14 +79,6 @@ input:focus,select:focus{border-color:var(--accent2)}
 @keyframes spin{to{transform:rotate(360deg)}}
 .loading-title{font-family:var(--font-head);font-size:17px;font-weight:600;color:var(--text)}
 .loading-sub{font-size:12px;color:var(--muted)}
-.fr-steg{font-size:12px;color:var(--text);text-align:center}
-.fr-bar{position:relative;width:100%;height:8px;background:rgba(255,255,255,.1);border-radius:4px;overflow:hidden}
-.fr-fyll{height:100%;width:0;background:var(--accent);border-radius:4px;transition:width .25s linear}
-.fr-fyll.estimat{background:repeating-linear-gradient(45deg,var(--accent) 0 10px,rgba(74,222,128,.65) 10px 20px)}
-.fr-fyll.ubestemt{width:30%;animation:frUbestemt 1.3s ease-in-out infinite;transition:none}
-@keyframes frUbestemt{0%{transform:translateX(-110%)}100%{transform:translateX(360%)}}
-.fr-tall{display:flex;justify-content:space-between;gap:10px;width:100%;font-size:11px;color:var(--muted)}
-.fr-tider{font-size:11px;color:var(--muted);margin:6px 0 10px}
 .modal-result{text-align:center}
 .result-check{width:52px;height:52px;margin:0 auto 14px;border-radius:50%;background:rgba(74,222,128,.15);border:1px solid rgba(74,222,128,.5);color:var(--accent);font-size:26px;line-height:50px}
 .result-head{font-family:var(--font-head);font-size:18px;font-weight:600;margin-bottom:18px;color:var(--text)}
@@ -151,7 +143,7 @@ __UTM_OPTIONS__
     <div>
       <div class="section-label">Parametere</div>
       <div class="row2">
-        <div class="field"><label>Radius (m)</label><input type="number" id="radius" value="50" min="5" max="5000" step="5" oninput="oppdaterKart()"></div>
+        <div class="field"><label>Radius (m)</label><input type="number" id="radius" value="50" min="5" max="500" step="5" oninput="oppdaterKart()"></div>
         <div class="field"><label>Punkttetthet (m)</label><input type="number" id="tetthet" value="2" min="1" max="20" step="1" oninput="sjekkTetthet()"></div>
       </div>
       <div id="tetthet-advarsel" style="display:none;font-size:10px;color:#facc15;margin-top:6px;padding:6px 10px;background:rgba(250,204,21,.08);border:1px solid rgba(250,204,21,.35);border-radius:5px">⚠ 1 m er laveste tillatte punkttetthet — DTM1 fra Kartverket har selv 1 m oppløsning.</div>
@@ -246,10 +238,7 @@ __UTM_SONE_OPTIONS__
     <div id="modal-loading" class="modal-loading">
       <div class="spinner"></div>
       <div class="loading-title">Oppretter Toposolid</div>
-      <div class="fr-steg" id="fr-steg">Starter …</div>
-      <div class="fr-bar"><div class="fr-fyll" id="fr-fyll"></div></div>
-      <div class="fr-tall"><span id="fr-detalj"></span><span id="fr-prosent"></span></div>
-      <div class="loading-sub" id="fr-tid">Brukt tid: 0 s</div>
+      <div class="loading-sub">Henter høydedata fra Kartverket og skriver til Revit-modellen …</div>
     </div>
 
     <div id="modal-result" class="modal-result" style="display:none">
@@ -289,7 +278,6 @@ function hostCall(action,payload){
 window.chrome.webview.addEventListener('message',function(e){
   let data;
   try{ data=JSON.parse(e.data); }catch(err){ return; }
-  if(data && data.type==='fremdrift'){ oppdaterFremdrift(data); return; }
   const pending=_pendingCalls[data.id];
   if(!pending)return;
   delete _pendingCalls[data.id];
@@ -506,61 +494,9 @@ async function oppdaterKart(){
   }
 }
 
-// ============================================================
-//  Fremdrift. Steg 1 (nedlasting) og 2 (klargjøring) er målt.
-//  Steg 3 (Revit bygger toposolidet) gir ingen målbar fremdrift - der
-//  vises en stripe som viser at Revit jobber, pluss brukt tid.
-// ============================================================
-const FR_STEG={1:'Henter terreng fra Kartverket',2:'Klargjør punkter for Revit',3:'Revit bygger toposolidet'};
-let frStart=0,frTotalTimer=null,frEstTimer=null;
-function fmtTid(s){s=Math.max(0,Math.round(s));return s<60?s+' s':Math.floor(s/60)+' min '+(s%60)+' s';}
-function stoppFremdrift(){
-  if(frTotalTimer){clearInterval(frTotalTimer);frTotalTimer=null;}
-  if(frEstTimer){clearInterval(frEstTimer);frEstTimer=null;}
-}
-function startFremdrift(){
-  stoppFremdrift();
-  frStart=Date.now();
-  const fyll=document.getElementById('fr-fyll');
-  fyll.className='fr-fyll';fyll.style.width='0%';
-  document.getElementById('fr-steg').textContent='Starter …';
-  document.getElementById('fr-detalj').textContent='';
-  document.getElementById('fr-prosent').textContent='';
-  document.getElementById('fr-tid').textContent='Brukt tid: 0 s';
-  frTotalTimer=setInterval(()=>{
-    document.getElementById('fr-tid').textContent='Brukt tid: '+fmtTid((Date.now()-frStart)/1000);
-  },500);
-}
-function oppdaterFremdrift(d){
-  const fyll=document.getElementById('fr-fyll');
-  const pros=document.getElementById('fr-prosent');
-  document.getElementById('fr-steg').textContent=`Steg ${d.steg} av ${d.antall_steg}: ${FR_STEG[d.steg]||''}`;
-  document.getElementById('fr-detalj').textContent=d.detalj||'';
-  if(d.fra_revit){
-    // Fremdrift rapportert av Revit selv (Application.ProgressChanged)
-    if(d.andel===null || d.andel===undefined || d.steg===3) return;  // bare tekst - behold linjen
-    if(frEstTimer){clearInterval(frEstTimer);frEstTimer=null;}
-    fyll.className='fr-fyll';
-    fyll.style.width=(100*Math.min(1,Math.max(0,d.andel))).toFixed(1)+'%';
-    pros.textContent=Math.round(100*d.andel)+' % (målt av Revit)';
-    return;
-  }
-  if(frEstTimer){clearInterval(frEstTimer);frEstTimer=null;}
-  if(d.andel!==null && d.andel!==undefined){
-    fyll.className='fr-fyll';
-    fyll.style.width=(100*Math.min(1,Math.max(0,d.andel))).toFixed(1)+'%';
-    pros.textContent=Math.round(100*d.andel)+' %';
-    return;
-  }
-  // Ingen målbar fremdrift tilgjengelig: vis en stripe som viser at det jobbes
-  fyll.className='fr-fyll ubestemt';fyll.style.width='';
-  pros.textContent='';
-}
-
 function aapneModal(){
   const ov=document.getElementById('modal-overlay');
   ov.classList.add('open');
-  startFremdrift();
   document.getElementById('modal-loading').style.display='flex';
   document.getElementById('modal-result').style.display='none';
   document.getElementById('modal-error').style.display='none';
@@ -569,7 +505,6 @@ function lukkModal(){
   document.getElementById('modal-overlay').classList.remove('open');
 }
 function visResultat(data){
-  stoppFremdrift();
   document.getElementById('modal-loading').style.display='none';
   document.getElementById('modal-error').style.display='none';
   document.getElementById('modal-result').style.display='block';
@@ -580,17 +515,12 @@ function visResultat(data){
   if(typeof data.nn54_offset!=='undefined'){
     html+=`<div class="detail-ok">NN54-korreksjon anvendt: ${data.nn54_offset>=0?'+':''}${data.nn54_offset.toFixed(4)} m</div>`;
   }
-  if(data.tider){
-    const t=data.tider;
-    html+=`<div class="fr-tider">Tid: terreng ${fmtTid(t.terreng)} · klargjøring ${fmtTid(t.punkter)} · Revit ${fmtTid(t.revit)}`+`</div>`;
-  }
   if(data.warning){
     html+=`<div class="detail-warn">⚠ ${data.warning}</div>`;
   }
   document.getElementById('result-detail').innerHTML=html;
 }
 function visFeil(msg){
-  stoppFremdrift();
   document.getElementById('modal-loading').style.display='none';
   document.getElementById('modal-result').style.display='none';
   document.getElementById('modal-error').style.display='block';

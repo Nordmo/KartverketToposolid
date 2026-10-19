@@ -162,6 +162,8 @@ eksempel for å dimensjonere skjerming mot innsyn.
   veggene i stasjonen. Resten av stasjonen finnes automatisk.
 - **Terreng:** Kartverket DTM1 for hele radiusen, med toposolidet lagt
   oppå. Alle vegger i området er med som hindringer.
+- **Observatører** ligger bare på toposolidet. Analysen når derfor ikke
+  lenger ut enn toposolidet, som med Lag Toposolid er maks 500 m radius.
 - **Resultat:** siktlinjer for de verste observatørene per vegg (rød inn
   til stasjonen, lilla videre til laveste synlige punkt på den valgte
   veggen), innsynskart i terrenget, rapport i pyRevit-konsollen og CSV.
@@ -257,17 +259,10 @@ på reell feilsøking:
   bekreftet fungerer (per nå: Python 3.12) — trenger du en annen
   hovedversjon, faller scriptet tilbake til å be deg installere manuelt
   og lime inn stien.
-- **"WCS-feil ... ArcGIS Server Error"** ved stor radius → fikset: terrenget
-  hentes nå i fliser på maks 1000 x 1000 piksler, med punkttettheten som
-  oppløsning. Store toposolider (f.eks. 2 km radius med 5 m tetthet) går
-  derfor fint. Grensen er 1 million punkter per toposolid; blir det flere,
-  får du beskjed om hvilken tetthet som holder seg under grensen.
-- **Revit bruker lang tid / «Not Responding» når toposolidet lagres** →
-  la det stå. Windows merker Revit som «Not Responding» når det er opptatt
-  i mer enn 5 sekunder. Henger det i mange minutter, trykk Alt+Tab og se
-  etter en Revit-dialog bak vinduet, og se i
-  `%APPDATA%\KartverketToposolid\revit_fremdrift_logg.txt`, som skrives
-  løpende og viser hva Revit gjør og eventuelle feilmeldinger.
+- **Revit står som «Not Responding» mens toposolidet lages** → la det
+  stå. Windows merker Revit slik når det er opptatt i mer enn 5 sekunder.
+  Radius er begrenset til 500 m, fordi Kartverket avviser større
+  enkeltforespørsler.
 - **"Name must be unique"** ved gjentatt bruk → skal ikke lenger skje
   (fikset ved å navngi opprettede Level ut fra kote)
 - **PyRevit er installert sentralt av IT til `Program Files`** (vanlig
