@@ -32,6 +32,7 @@ import os
 import re
 import json
 import math
+import time
 import traceback
 
 # VIKTIG: pyrevit.forms er IKKE stottet under pyRevit sin CPython-motor
@@ -42,7 +43,7 @@ import traceback
 # tatt.
 import clr
 clr.AddReference("PresentationFramework")
-from System.Windows import MessageBox, MessageBoxButton, MessageBoxImage
+from System.Windows import MessageBox, MessageBoxButton, MessageBoxImage, MessageBoxResult
 
 
 def _vis_feilmelding(tittel, tekst):
@@ -144,7 +145,7 @@ except Exception as ex:
 try:
     from Autodesk.Revit.DB import (
         FilteredElementCollector, BuiltInCategory, BuiltInParameter,
-        UnitUtils, XYZ, Transaction, ElementId, Level,
+        UnitUtils, XYZ, Transaction, TransactionGroup, ElementId, Level,
     )
 except Exception as ex:
     _feil_og_avslutt("Importere grunnleggende Autodesk.Revit.DB-typer", ex)
@@ -199,13 +200,30 @@ class _EnkelHttpRespons(object):
             raise Exception("HTTP-feil {}".format(self.status_code))
 
 
-def _http_get(url, params=None, timeout=15):
+def _http_get(url, params=None, timeout=15, fremdrift=None):
+    """fremdrift(lest_bytes, total_bytes_eller_None) kalles underveis i
+    nedlastingen hvis den er gitt."""
     full_url = url
     if params:
         full_url = "{}?{}".format(url, urllib.parse.urlencode(params))
     try:
         with urllib.request.urlopen(full_url, timeout=timeout) as resp:
-            return _EnkelHttpRespons(resp.read(), resp.getcode())
+            if fremdrift is None:
+                return _EnkelHttpRespons(resp.read(), resp.getcode())
+            try:
+                total = int(resp.headers.get("Content-Length") or 0) or None
+            except Exception:
+                total = None
+            deler = []
+            lest = 0
+            while True:
+                bit = resp.read(65536)
+                if not bit:
+                    break
+                deler.append(bit)
+                lest += len(bit)
+                fremdrift(lest, total)
+            return _EnkelHttpRespons(b"".join(deler), resp.getcode())
     except urllib.error.HTTPError as e:
         return _EnkelHttpRespons(e.read(), e.code)
 
@@ -358,7 +376,8 @@ def hent_coverage_navn():
 
 def generer_punkter(epsg_inn, midtpunkt_e, midtpunkt_n, radius, tetthet,
                      nullpunkt_e, nullpunkt_n, relativ_z, vert_offset=0.0,
-                     utsnitt_form="kvadrat"):
+                     utsnitt_form="kvadrat", fremdrift=None, med_indekser=False):
+    """fremdrift(andel 0-1, detaljtekst) kalles under nedlastingen."""
     if er_hpcs(epsg_inn):
         _u34_q = Transformer.from_crs("EPSG:25834", "EPSG:25833", always_xy=True)
         _q_u34 = Transformer.from_crs("EPSG:25833", "EPSG:25834", always_xy=True)
@@ -379,58 +398,144 @@ def generer_punkter(epsg_inn, midtpunkt_e, midtpunkt_n, radius, tetthet,
     utm_e, utm_n = til_utm33_fn(midtpunkt_e, midtpunkt_n)
     minx, miny = utm_e - radius, utm_n - radius
     maxx, maxy = utm_e + radius, utm_n + radius
-    px = int(radius * 2)
 
-    coverage = hent_coverage_navn()[0]
-    params = {
-        "SERVICE": "WCS", "VERSION": "1.0.0", "REQUEST": "GetCoverage",
-        "COVERAGE": coverage, "CRS": "EPSG:25833",
-        "BBOX": "{},{},{},{}".format(minx, miny, maxx, maxy),
-        "WIDTH": px, "HEIGHT": px, "FORMAT": "GeoTIFF",
-    }
-    r = _http_get(WCS_URL, params=params, timeout=30)
-    if r.content[:1] == b"<":
-        raise Exception("WCS-feil: {}".format(r.content[:300]))
+    # Terrenget hentes direkte med punkttettheten som oppløsning (5 m
+    # tetthet = 5 m piksler), slik at store utsnitt ikke laster ned mer
+    # enn noedvendig. Med tetthet 1 m er dette identisk med tidligere.
+    steg = max(1, int(tetthet))
+    res = float(steg)
+    px = max(1, int(round(2 * radius / res)))
 
-    with MemoryFile(r.content) as mf:
-        with mf.open() as ds:
-            data = ds.read(1).astype(float)
-            nodata = ds.nodata
-            if nodata is not None:
-                data[data == nodata] = np.nan
-            data[data < -100] = np.nan
-            data[data > 3000] = np.nan
+    anslag = px * px * (math.pi / 4.0 if utsnitt_form == "sirkel" else 1.0)
+    if anslag > MAKS_PUNKTER:
+        raise Exception(
+            "For mange punkter: ca. {:,.0f} (grense {:,.0f}). Øk punkttettheten "
+            "eller reduser radius. Med {:.0f} m radius gir {:.0f} m tetthet ca. "
+            "{:,.0f} punkter.".format(
+                anslag, MAKS_PUNKTER, radius, _foreslaa_tetthet(radius, utsnitt_form),
+                (2 * radius / _foreslaa_tetthet(radius, utsnitt_form)) ** 2
+                * (math.pi / 4.0 if utsnitt_form == "sirkel" else 1.0),
+            ).replace(",", " ")
+        )
 
-            if np.all(np.isnan(data)):
-                raise Exception("Ingen gyldige høydeverdier. Sjekk koordinater og koordinatsystem.")
+    data = _hent_dtm_flislagt(minx, maxy, res, px, px, fremdrift=fremdrift)
 
-            transform = ds.transform
-            steg = max(1, int(tetthet))
-            rows, cols = data.shape
+    if np.all(np.isnan(data)):
+        raise Exception("Ingen gyldige høydeverdier. Sjekk koordinater og koordinatsystem.")
 
-            rå_punkter = []
-            for row in range(0, rows, steg):
-                for col in range(0, cols, steg):
-                    h = data[row, col]
-                    if np.isnan(h):
-                        continue
-                    ue, un = rasterio.transform.xy(transform, row, col)
-                    pe, pn = fra_utm33_fn(ue, un)
-                    if utsnitt_form == "sirkel":
-                        if ((pe - midtpunkt_e) ** 2 + (pn - midtpunkt_n) ** 2) ** 0.5 > radius:
-                            continue
-                    x = round(pe - nullpunkt_e, 4)
-                    y = round(pn - nullpunkt_n, 4)
-                    rå_punkter.append((x, y, float(h)))
+    # Pikselsentre (vektorisert - raskt ogsaa for flere hundre tusen punkter)
+    rows, cols = data.shape
+    rr, cc = np.nonzero(~np.isnan(data))
+    h = data[rr, cc]
+    ue = minx + (cc + 0.5) * res
+    un = maxy - (rr + 0.5) * res
+    pe, pn = fra_utm33_fn(ue, un)
+    pe = np.asarray(pe, dtype=float)
+    pn = np.asarray(pn, dtype=float)
+    if utsnitt_form == "sirkel":
+        inne = np.hypot(pe - midtpunkt_e, pn - midtpunkt_n) <= radius
+        pe, pn, h = pe[inne], pn[inne], h[inne]
+        rr, cc = rr[inne], cc[inne]
 
-            if not rå_punkter:
-                raise Exception("Ingen punkter innenfor valgt utsnitt. Prøv større radius.")
+    if h.size == 0:
+        raise Exception("Ingen punkter innenfor valgt utsnitt. Prøv større radius.")
 
-            z_ref = min(p[2] for p in rå_punkter) if relativ_z else 0.0
-            voff = 0.0 if relativ_z else vert_offset
-            punkter = [(x, y, round(h - z_ref + voff, 3)) for (x, y, h) in rå_punkter]
+    z_ref = float(h.min()) if relativ_z else 0.0
+    voff = 0.0 if relativ_z else vert_offset
+    x = np.round(pe - nullpunkt_e, 4)
+    y = np.round(pn - nullpunkt_n, 4)
+    z = np.round(h - z_ref + voff, 3)
+    punkter = list(zip(x.tolist(), y.tolist(), z.tolist()))
 
+    if med_indekser:
+        return punkter, rr, cc
     return punkter
+
+
+# Grense for antall punkter i ett toposolid. Satt for aa unngaa at Revit
+# henger paa enorme punktmengder - juster hvis Revit viser seg aa takle mer.
+MAKS_PUNKTER = 1000000
+
+# Kartverket sin WCS avviser for store enkeltforespoersler (ArcGIS-feilside).
+# 1000 x 1000 piksler per flis er kjent aa fungere.
+FLIS_PX = 1000
+
+
+def _foreslaa_tetthet(radius, utsnitt_form):
+    faktor = math.pi / 4.0 if utsnitt_form == "sirkel" else 1.0
+    t = 1
+    while (2 * radius / t) ** 2 * faktor > MAKS_PUNKTER:
+        t += 1
+    return t
+
+
+def _wcs_feiltekst(innhold):
+    tekst = innhold.decode("utf-8", errors="replace")
+    m = re.search(r"<title>([^<]*)</title>", tekst, re.I)
+    m2 = re.search(r"<ServiceException[^>]*>([^<]*)<", tekst)
+    detalj = (m2.group(1).strip() if m2 else "") or (m.group(1).strip() if m else "")
+    return "Kartverket avviste forespørselen{}".format(": " + detalj if detalj else "")
+
+
+def _hent_dtm_flislagt(minx, maxy, res, bredde_px, hoyde_px, fremdrift=None):
+    """Henter DTM i fliser paa maks FLIS_PX x FLIS_PX piksler og setter dem
+    sammen. Piksel (r, c) har senter i (minx + (c+0.5)res, maxy - (r+0.5)res).
+    NaN der Kartverket ikke har data."""
+    coverage = hent_coverage_navn()[0]
+    data = np.full((hoyde_px, bredde_px), np.nan)
+    fliser = [(r0, c0) for r0 in range(0, hoyde_px, FLIS_PX) for c0 in range(0, bredde_px, FLIS_PX)]
+    # Fremdrift vektes etter antall piksler, siden kantflisene kan vaere smaa
+    tot_px = float(bredde_px * hoyde_px)
+    ferdig_px = 0.0
+    for i, (r0, c0) in enumerate(fliser):
+        h = min(FLIS_PX, hoyde_px - r0)
+        w = min(FLIS_PX, bredde_px - c0)
+        fx0 = minx + c0 * res
+        fy1 = maxy - r0 * res
+        params = {
+            "SERVICE": "WCS", "VERSION": "1.0.0", "REQUEST": "GetCoverage",
+            "COVERAGE": coverage, "CRS": "EPSG:25833",
+            "BBOX": "{},{},{},{}".format(fx0, fy1 - h * res, fx0 + w * res, fy1),
+            "WIDTH": w, "HEIGHT": h, "FORMAT": "GeoTIFF",
+        }
+        flis = None
+        feil = None
+        # Forventet stoerrelse (float32 GeoTIFF) brukes hvis serveren ikke
+        # oppgir Content-Length.
+        forventet = 4.0 * w * h
+
+        def _bytes(lest, total, _i=i, _ferdig=ferdig_px, _px=w * h):
+            if fremdrift is None:
+                return
+            delandel = min(1.0, lest / float(total or forventet))
+            fremdrift((_ferdig + delandel * _px) / tot_px,
+                      "Flis {}/{} - {:.1f} MB lastet ned".format(_i + 1, len(fliser), lest / 1e6))
+
+        for _forsok in range(3):
+            try:
+                r = _http_get(WCS_URL, params=params, timeout=60, fremdrift=_bytes)
+                if r.content[:1] == b"<":
+                    raise Exception(_wcs_feiltekst(r.content))
+                with MemoryFile(r.content) as mf:
+                    with mf.open() as ds:
+                        flis = ds.read(1).astype(float)
+                        nodata = ds.nodata
+                break
+            except Exception as ex:
+                feil = ex
+        if flis is None:
+            raise Exception("Kunne ikke hente terrengflis {}/{}: {}".format(i + 1, len(fliser), feil))
+        if flis.shape != (h, w):
+            raise Exception("Uventet flisstørrelse {} fra Kartverket (forventet {}).".format(flis.shape, (h, w)))
+        if nodata is not None:
+            flis[flis == nodata] = np.nan
+        flis[flis < -100] = np.nan
+        flis[flis > 3000] = np.nan
+        data[r0:r0 + h, c0:c0 + w] = flis
+        ferdig_px += w * h
+        if fremdrift is not None:
+            fremdrift(ferdig_px / tot_px, "Flis {}/{} ferdig".format(i + 1, len(fliser)))
+    return data
 
 
 # ====================================================================
@@ -484,22 +589,72 @@ def _unikt_levelnavn(doc, basisnavn):
     return "{} ({})".format(basisnavn, i)
 
 
-def opprett_toposolid(doc, punkter, base_pos):
-    """Oppretter Toposolid fra punktliste (x, y, z i meter, RELATIVT
-    til Project Base Point). Punktene forskyves med Base Point sin
-    egen interne posisjon før de brukes som XYZ, slik at resultatet
-    blir korrekt uansett hvor Revit sitt interne origo ligger i
-    forhold til Base Point.
+_TIDSFIL = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")),
+                        "KartverketToposolid", "lag_toposolid_tid.json")
 
-    !! USIKKERT / MÅ VERIFISERES !!
-    Toposolid.Create sin eksakte signatur er skrevet etter beste
-    kunnskap om Revit 2024-2026 API, men IKKE testet mot en ekte
-    installasjon. Hvis dette feiler:
-      1. Åpne RevitLookup eller Revit API-dokumentasjonen for
-         Autodesk.Revit.DB.Toposolid i din Revit 2026 SDK.
-      2. Sjekk om metoden heter noe annet, tar andre parametre,
-         eller krever en IList<CurveLoop> i tillegg til punktene.
-      3. Juster kallet nedenfor deretter.
+
+def _beskriv_sammenfoyning(doc, ts):
+    """Hvilke elementer Revit automatisk har sammenføyd toposolidet med,
+    gruppert per kategori (for feilsøking av treg Commit)."""
+    try:
+        from Autodesk.Revit.DB import JoinGeometryUtils
+        ids = list(JoinGeometryUtils.GetJoinedElements(doc, ts))
+        teller = {}
+        for eid in ids:
+            el = doc.GetElement(eid)
+            navn = el.Category.Name if el is not None and el.Category is not None else "ukjent"
+            teller[navn] = teller.get(navn, 0) + 1
+        deler = ", ".join("{} {}".format(v, k) for k, v in sorted(teller.items(), key=lambda kv: -kv[1]))
+        return "sammenføyd med {} elementer{}".format(len(ids), ": " + deler if deler else "")
+    except Exception as ex:
+        return "kunne ikke lese sammenføyninger ({})".format(ex)
+
+
+def _elementer_i_omraade(doc, ts):
+    """Modellelementer hvis bounding box overlapper flisens (antall per
+    kategori). Skrives før Commit, så vi ser hva Revit kan komme til å
+    sammenføye flisen med - også om Commit henger."""
+    try:
+        from Autodesk.Revit.DB import BoundingBoxIntersectsFilter, Outline
+        bb = ts.get_BoundingBox(None)
+        filt = BoundingBoxIntersectsFilter(Outline(bb.Min, bb.Max))
+        teller = {}
+        for el in FilteredElementCollector(doc).WherePasses(filt).WhereElementIsNotElementType():
+            if el.Id == ts.Id or el.Category is None:
+                continue
+            navn = el.Category.Name
+            teller[navn] = teller.get(navn, 0) + 1
+        if not teller:
+            return "ingen"
+        return ", ".join("{} {}".format(v, k) for k, v in sorted(teller.items(), key=lambda kv: -kv[1]))
+    except Exception as ex:
+        return "kunne ikke lese ({})".format(ex)
+
+
+def _skriv_fremdriftslogg(n_punkter, sekunder, linjer):
+    """Logger hvilke fremdriftshendelser Revit sendte (for feilsoeking)."""
+    try:
+        sti = os.path.join(os.path.dirname(_TIDSFIL), "revit_fremdrift_logg.txt")
+        with open(sti, "w", encoding="utf-8") as f:
+            f.write("{} punkter, {:.1f} s, {} linjer (fase-skifter + maks 1 posisjon/s; "
+                    "linjer med --- er egne tidsmerker)\n".format(n_punkter, sekunder, len(linjer)))
+            f.write("\n".join(linjer))
+    except Exception:
+        pass
+
+
+def opprett_toposolid(doc, fliser, base_pos, meld=None):
+    """Oppretter toposolid fra punktlister (x, y, z i meter RELATIVT til
+    Project Base Point). Knappen sender én liste = ett samlet toposolid.
+    Hver liste lages i egen transaksjon inne i en TransactionGroup (ett
+    angre-steg). Revit sine fremdriftshendelser, meldinger (advarsler/feil)
+    og tidsmerker for Create/Commit skrives løpende til
+    %APPDATA%\\KartverketToposolid\\revit_fremdrift_logg.txt.
+
+    Punktene forskyves med Base Point sin interne posisjon, slik at
+    resultatet blir korrekt uansett hvor Revit sitt interne origo ligger.
+    Toposolid.Create(doc, punkter, typeId, levelId) - sjekk signaturen med
+    RevitLookup/SDK hvis en fremtidig Revit-versjon endrer den.
     """
     if not _TOPOSOLID_OK:
         raise Exception(
@@ -507,14 +662,27 @@ def opprett_toposolid(doc, punkter, base_pos):
             "Toposolid krever Revit 2024 eller nyere."
         )
 
-    xyz_punkter = List[XYZ]()
-    z_verdier_ft = []
-    for x_rel, y_rel, z_rel in punkter:
-        x_ft = UnitUtils.ConvertToInternalUnits(x_rel, _METER) + base_pos.X
-        y_ft = UnitUtils.ConvertToInternalUnits(y_rel, _METER) + base_pos.Y
-        z_ft = UnitUtils.ConvertToInternalUnits(z_rel, _METER) + base_pos.Z
-        xyz_punkter.Add(XYZ(x_ft, y_ft, z_ft))
-        z_verdier_ft.append(z_ft)
+    meld = meld or (lambda *a, **k: None)
+    # Omregningsfaktor hentes én gang (i stedet for tre API-kall per punkt)
+    m_til_ft = UnitUtils.ConvertToInternalUnits(1.0, _METER)
+    bx, by, bz = base_pos.X, base_pos.Y, base_pos.Z
+    n_tot = sum(len(f) for f in fliser)
+    hvert = max(1, n_tot // 50)
+    xyz_fliser = []
+    z_min_ft = float("inf")
+    i = 0
+    for flis in fliser:
+        liste = List[XYZ]()
+        for (x_rel, y_rel, z_rel) in flis:
+            z_ft = z_rel * m_til_ft + bz
+            liste.Add(XYZ(x_rel * m_til_ft + bx, y_rel * m_til_ft + by, z_ft))
+            if z_ft < z_min_ft:
+                z_min_ft = z_ft
+            i += 1
+            if i % hvert == 0:
+                meld(2, i / float(n_tot), "{:,} av {:,} punkter klargjort".format(i, n_tot).replace(",", " "))
+        xyz_fliser.append(liste)
+    meld(2, 1.0, "{:,} punkter klargjort".format(n_tot).replace(",", " "))
 
     toposolid_type_id = FilteredElementCollector(doc).OfClass(ToposolidType).FirstElementId()
     if toposolid_type_id == ElementId.InvalidElementId:
@@ -522,17 +690,106 @@ def opprett_toposolid(doc, punkter, base_pos):
 
     # Toposolid.Create bygger et volum ned til det gitte Level, ikke en
     # tynn skive - vi trenger derfor et Level plassert like under
-    # laveste terrengpunkt (samme virkemaate som nettapp-CSV-importen
-    # ga, ca. 1 m under laveste kote), i stedet for prosjektets
-    # eksisterende laveste niva (som typisk ligger paa kote 0).
+    # laveste terrengpunkt (ca. 1 m under laveste kote), felles for alle
+    # fliser, i stedet for prosjektets laveste niva (typisk kote 0).
     TYKKELSE_UNDER_LAVESTE_M = 1.0
-    z_min_ft = min(z_verdier_ft)
     onsket_niva_ft = z_min_ft - UnitUtils.ConvertToInternalUnits(TYKKELSE_UNDER_LAVESTE_M, _METER)
     TOLERANSE_FT = UnitUtils.ConvertToInternalUnits(0.05, _METER)  # 5 cm
 
-    t = Transaction(doc, "Lag Toposolid fra Kartverket-data")
-    t.Start()
+    # Felles merke i Kommentarer, slik at Innsyn kan finne alle flisene
+    # naar man velger én av dem.
+    batch = "Kartverket-toposolid {}".format(time.strftime("%Y%m%d-%H%M%S"))
+    n_fliser = len(xyz_fliser)
+
+    # Revit sin egen fremdrift logges (for feilsoeking) og teksten vises,
+    # men brukes ikke til linjen - den er for grov (kun "Regenerating 0 %").
+    logg = []
+    t0 = time.time()
+    sist_pos = {"t": 0.0}
+    # Loggen skrives LØPENDE til fil, slik at den finnes selv om Revit
+    # henger eller krasjer midt i en flis.
+    loggfil = {"f": None}
     try:
+        sti = os.path.join(os.path.dirname(_TIDSFIL), "revit_fremdrift_logg.txt")
+        os.makedirs(os.path.dirname(sti), exist_ok=True)
+        loggfil["f"] = open(sti, "w", encoding="utf-8")
+        loggfil["f"].write("{} punkter i {} fliser, startet {} (skrives løpende)\n".format(
+            n_tot, len(xyz_fliser), time.strftime("%Y-%m-%d %H:%M:%S")))
+        loggfil["f"].flush()
+    except Exception:
+        loggfil["f"] = None
+
+    def _skriv(linje):
+        logg.append(linje)
+        try:
+            if loggfil["f"] is not None:
+                loggfil["f"].write(linje + "\n")
+                loggfil["f"].flush()
+        except Exception:
+            pass
+
+    def merk(tekst):
+        _skriv("{:8.2f}s  --- {}".format(time.time() - t0, tekst))
+
+    def on_revit_fremdrift(sender, e):
+        # Logger fase-skifter alltid, posisjonsoppdateringer maks 1 per sekund,
+        # slik at loggen dekker hele kjøringen og ikke fylles opp av ett steg.
+        try:
+            naa = time.time()
+            stage = str(e.Stage)
+            if stage == "PositionChanged" and naa - sist_pos["t"] < 1.0:
+                return
+            sist_pos["t"] = naa
+            if len(logg) < 3000:
+                tekst = (e.Caption or "").strip() or "Revit arbeider"
+                _skriv("{:8.2f}s  {:<16} {:>8} / {:<8} {}".format(
+                    naa - t0, stage, e.Position, e.UpperRange, tekst))
+        except Exception:
+            pass
+
+    # Revit-meldinger (advarsler/feil) under Commit logges med tekst, slik at
+    # vi ser om en flis henger fordi Revit venter på svar i en dialog.
+    # Advarsler slettes, så de ikke stopper opp eller hoper seg opp.
+    def on_failures(sender, e):
+        try:
+            from Autodesk.Revit.DB import FailureSeverity, FailureProcessingResult
+            fa = e.GetFailuresAccessor()
+            for m in list(fa.GetFailureMessages()):
+                sev = m.GetSeverity()
+                try:
+                    tekst = m.GetDescriptionText()
+                except Exception:
+                    tekst = "?"
+                merk("Revit-melding ({}): {} [{} elementer]".format(
+                    sev, tekst, m.GetFailingElementIds().Count))
+                if sev == FailureSeverity.Warning:
+                    fa.DeleteWarning(m)
+            e.SetProcessingResult(FailureProcessingResult.Continue)
+        except Exception as ex:
+            try:
+                merk("Feil i meldingshåndtering: {}".format(ex))
+            except Exception:
+                pass
+
+    app = doc.Application
+    abonnert = False
+    try:
+        app.ProgressChanged += on_revit_fremdrift
+        abonnert = True
+    except Exception:
+        pass
+    abonnert_feil = False
+    try:
+        app.FailuresProcessing += on_failures
+        abonnert_feil = True
+    except Exception:
+        pass
+
+    tg = TransactionGroup(doc, "Lag Toposolid fra Kartverket-data")
+    tg.Start()
+    try:
+        t = Transaction(doc, "Nivå for toposolid")
+        t.Start()
         level = None
         for lvl in FilteredElementCollector(doc).OfClass(Level):
             if abs(lvl.Elevation - onsket_niva_ft) < TOLERANSE_FT:
@@ -543,15 +800,76 @@ def opprett_toposolid(doc, punkter, base_pos):
             onsket_niva_m = UnitUtils.ConvertFromInternalUnits(onsket_niva_ft, _METER)
             basisnavn = "Terreng - Kartverket import (kote {:.2f})".format(onsket_niva_m)
             level.Name = _unikt_levelnavn(doc, basisnavn)
-
-        Toposolid.Create(doc, xyz_punkter, toposolid_type_id, level.Id)
         t.Commit()
+
+        ferdig = 0
+        t_revit = 0.0
+        for k, liste in enumerate(xyz_fliser):
+            nk = liste.Count
+            fra, til = ferdig / float(n_tot), (ferdig + nk) / float(n_tot)
+            if n_fliser > 1:
+                tekst = "Flis {} av {} ({:,} punkter)".format(k + 1, n_fliser, nk).replace(",", " ")
+            else:
+                tekst = "Revit bygger toposolidet ({:,} punkter)".format(nk).replace(",", " ")
+            meld(3, fra if n_fliser > 1 else None, tekst)
+            tk = time.time()
+            t = Transaction(doc, "Toposolid flis {}".format(k + 1))
+            t.Start()
+            try:
+                merk("flis {}/{}: Toposolid.Create start ({} punkter)".format(k + 1, n_fliser, nk))
+                tc = time.time()
+                ts = Toposolid.Create(doc, liste, toposolid_type_id, level.Id)
+                merk("flis {}/{}: Toposolid.Create ferdig etter {:.1f} s".format(k + 1, n_fliser, time.time() - tc))
+                try:
+                    p = ts.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)
+                    if p is not None and not p.IsReadOnly:
+                        p.Set("{} (flis {}/{})".format(batch, k + 1, n_fliser) if n_fliser > 1 else batch)
+                except Exception:
+                    pass
+                merk("flis {}/{}: elementer i flisens område før Commit: {}".format(
+                    k + 1, n_fliser, _elementer_i_omraade(doc, ts)))
+                merk("flis {}/{}: Commit start".format(k + 1, n_fliser))
+                tc = time.time()
+                t.Commit()
+                merk("flis {}/{}: Commit ferdig etter {:.1f} s".format(k + 1, n_fliser, time.time() - tc))
+                merk("flis {}/{}: {}".format(k + 1, n_fliser, _beskriv_sammenfoyning(doc, ts)))
+            except Exception:
+                if t.HasStarted() and not t.HasEnded():
+                    t.RollBack()
+                raise
+            t_revit += time.time() - tk
+            ferdig += nk
+            meld(3, til, "{} ferdig".format(tekst))
+        merk("TransactionGroup.Assimilate start")
+        tg.Assimilate()
+        merk("TransactionGroup.Assimilate ferdig")
     except Exception as ex:
-        t.RollBack()
+        if tg.HasStarted() and not tg.HasEnded():
+            tg.RollBack()
         raise Exception(
             "Kunne ikke opprette Toposolid — se kommentar i opprett_toposolid() "
             "i script.py for hva som bør sjekkes. Detalj: {}".format(ex)
         )
+    finally:
+        if abonnert:
+            try:
+                app.ProgressChanged -= on_revit_fremdrift
+            except Exception:
+                pass
+        if abonnert_feil:
+            try:
+                app.FailuresProcessing -= on_failures
+            except Exception:
+                pass
+
+    brukt = time.time() - t0
+    try:
+        if loggfil["f"] is not None:
+            loggfil["f"].write("FERDIG: {:.1f} s totalt\n".format(brukt))
+            loggfil["f"].close()
+    except Exception:
+        pass
+    return brukt, n_fliser
 
 
 # ====================================================================
@@ -615,7 +933,7 @@ def do_convert_to_wgs84(payload):
     return {"lat": lat, "lng": lng}
 
 
-def do_lag_toposolid(doc, base_pos, payload):
+def do_lag_toposolid(doc, base_pos, payload, meld=None):
     epsg = payload["epsg"]
     vert = payload.get("vert", 0.0) or 0.0
     nn54_korr = payload.get("nn54_korr", False)
@@ -638,17 +956,28 @@ def do_lag_toposolid(doc, base_pos, payload):
         except Exception as ge:
             warning = "NN54-korreksjon kunne ikke beregnes: {}".format(str(ge)[:100])
 
+    meld = meld or (lambda *a, **k: None)
+    t_start = time.time()
+    meld(1, 0.0, "Kobler til Kartverket ...")
     punkter = generer_punkter(
         epsg_inn=epsg, midtpunkt_e=mid_e, midtpunkt_n=mid_n,
         radius=radius, tetthet=tetthet,
         nullpunkt_e=null_e, nullpunkt_n=null_n, relativ_z=relativ_z,
         vert_offset=vert, utsnitt_form=utsnitt_form,
+        fremdrift=lambda andel, detalj: meld(1, andel, detalj),
     )
+    t_terreng = time.time() - t_start
 
-    opprett_toposolid(doc, punkter, base_pos)
+    t_punkter_start = time.time()
+    # Ett samlet toposolid (som i den opprinnelige versjonen)
+    t_revit, _ = opprett_toposolid(doc, [punkter], base_pos, meld=meld)
+    t_punkter = time.time() - t_punkter_start - t_revit
 
     z_vals = [p[2] for p in punkter]
-    resultat = {"antall": len(punkter), "min_z": min(z_vals), "max_z": max(z_vals)}
+    resultat = {"antall": len(punkter), "min_z": min(z_vals), "max_z": max(z_vals),
+                "tider": {"terreng": round(t_terreng, 1), "punkter": round(t_punkter, 1),
+                          "revit": round(t_revit, 1)},
+}
     if nn54_offset is not None:
         resultat["nn54_offset"] = round(nn54_offset, 4)
     if warning:
@@ -659,6 +988,17 @@ def do_lag_toposolid(doc, base_pos, payload):
 # ====================================================================
 #  VINDU (WPF + WebView2)
 # ====================================================================
+
+def _pump_ui():
+    """Lar WPF/WebView2 behandle ventende meldinger (som DoEvents), slik at
+    fremdriftsmeldingene faktisk vises mens arbeidet paagaar."""
+    try:
+        from System import Action
+        from System.Windows.Threading import Dispatcher, DispatcherPriority
+        Dispatcher.CurrentDispatcher.Invoke(DispatcherPriority.Background, Action(lambda: None))
+    except Exception:
+        pass
+
 
 def vis_vindu(doc):
     null_e, null_n, base_pos = hent_base_point(doc)
@@ -703,6 +1043,38 @@ def vis_vindu(doc):
     os.environ["WEBVIEW2_USER_DATA_FOLDER"] = _user_data_dir
     window.Content = webview
 
+    _tilstand = {"opptatt": False, "sist": 0.0}
+
+    def meld_fremdrift(steg, andel, detalj, estimat_s=None, fra_revit=False, segment=None):
+        """Sender fremdrift til grensesnittet. Begrenset til ca. 10 per
+        sekund, men steg-skifter og estimater sendes alltid. Meldinger fra
+        Revit sin ProgressChanged pumper IKKE meldingskoeen (vi er da midt
+        inne i et Revit-kall) - WebView2 tegner i egen prosess uansett."""
+        naa = time.time()
+        viktig = (estimat_s is not None or segment is not None or andel in (0.0, 1.0)
+                  or (andel is None and not fra_revit) or steg == 3)
+        if not viktig and naa - _tilstand["sist"] < 0.1:
+            return
+        _tilstand["sist"] = naa
+        try:
+            webview.CoreWebView2.PostWebMessageAsString(json.dumps({
+                "type": "fremdrift", "steg": steg, "antall_steg": 3,
+                "andel": andel, "detalj": detalj, "estimat_s": estimat_s,
+                "fra_revit": fra_revit, "segment": segment,
+            }))
+            if not fra_revit:
+                _pump_ui()
+        except Exception:
+            pass  # fremdrift er aldri kritisk
+
+    def on_closing(sender, e):
+        # Ikke la vinduet lukkes midt i en kjoering (fremdriften pumper
+        # meldingskoeen, saa lukkeknappen er klikkbar underveis).
+        if _tilstand["opptatt"]:
+            e.Cancel = True
+
+    window.Closing += on_closing
+
     def on_web_message(sender, args):
         call_id = None
         try:
@@ -717,14 +1089,23 @@ def vis_vindu(doc):
             elif action == "convert_to_wgs84":
                 result = do_convert_to_wgs84(payload)
             elif action == "lag_toposolid":
-                result = do_lag_toposolid(doc, base_pos, payload)
+                if _tilstand["opptatt"]:
+                    raise Exception("En toposolid lages allerede - vent til den er ferdig.")
+                _tilstand["opptatt"] = True
+                try:
+                    result = do_lag_toposolid(doc, base_pos, payload, meld=meld_fremdrift)
+                finally:
+                    _tilstand["opptatt"] = False
             else:
                 result = {"error": "Ukjent handling: {}".format(action)}
         except Exception as ex:
             result = {"error": str(ex)}
 
         svar = json.dumps({"id": call_id, "result": result})
-        webview.CoreWebView2.PostWebMessageAsString(svar)
+        try:
+            webview.CoreWebView2.PostWebMessageAsString(svar)
+        except Exception:
+            pass  # vinduet er lukket
 
     def on_init(sender, args):
         if args.IsSuccess:
